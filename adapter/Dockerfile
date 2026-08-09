@@ -20,5 +20,5 @@ RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin intercom \
  && chown -R intercom:intercom /captures /run/intercom /app
 USER intercom:intercom
 ENV XDG_RUNTIME_DIR=/run/intercom
-EXPOSE 8080
+EXPOSE 8080 8090
 CMD ["python3", "/app/adapter.py"]

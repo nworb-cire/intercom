@@ -20,6 +20,8 @@ DEVICE_ID = os.environ["DEVICE_ID"]
 SOURCE_KIND = os.environ.get("SOURCE_KIND", "silence")
 SOURCE_URI = os.environ.get("SOURCE_URI", "")
 CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
+STREAM_RECEIVED = os.environ.get("STREAM_RECEIVED", "false").lower() == "true"
+STREAM_PORT = int(os.environ.get("STREAM_PORT", "8090"))
 FREESWITCH_URI = os.environ.get("FREESWITCH_URI", "sip:9000@freeswitch:5070")
 CONFIG = Path("/run/intercom/baresip")
 
@@ -101,6 +103,33 @@ def start_capture() -> subprocess.Popen[bytes] | None:
         ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
         stdout=subprocess.PIPE,
     )
+
+
+def serve_received_audio() -> None:
+    """Expose received conference audio as a reconnectable MP3 HTTP stream."""
+    while True:
+        parec = subprocess.Popen(
+            ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
+            stdout=subprocess.PIPE,
+        )
+        ffmpeg = subprocess.Popen(
+            [
+                "ffmpeg", "-nostdin", "-loglevel", "warning", "-f", "s16le", "-ar", "16000",
+                "-ac", "1", "-i", "pipe:0", "-codec:a", "libmp3lame", "-b:a", "64k",
+                "-content_type", "audio/mpeg", "-f", "mp3", "-listen", "1",
+                f"http://0.0.0.0:{STREAM_PORT}/stream.mp3",
+            ],
+            stdin=parec.stdout,
+        )
+        print(f"received-audio stream listening on :{STREAM_PORT}/stream.mp3", flush=True)
+        return_code = ffmpeg.wait()
+        parec.terminate()
+        try:
+            parec.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            parec.kill()
+        print(f"received-audio client disconnected (ffmpeg exit {return_code}); restarting", flush=True)
+        time.sleep(1)
     return subprocess.Popen(
         [
             "ffmpeg", "-nostdin", "-loglevel", "warning", "-f", "s16le", "-ar", "16000",
@@ -114,6 +143,8 @@ def start_capture() -> subprocess.Popen[bytes] | None:
 write_config()
 start_pulse()
 capture = start_capture()
+if STREAM_RECEIVED:
+    threading.Thread(target=serve_received_audio, daemon=True).start()
 baresip = subprocess.Popen(
     ["baresip", "-f", str(CONFIG)],
     stdin=subprocess.PIPE,
@@ -164,6 +195,7 @@ class Handler(BaseHTTPRequestHandler):
             "source_kind": SOURCE_KIND,
             "connected": connected,
             "capture": CAPTURE_RECEIVED,
+            "stream": STREAM_RECEIVED,
         })
 
     def do_POST(self) -> None:

@@ -84,6 +84,24 @@ services:
       SOURCE_KIND: gstreamer
       SOURCE_URI: rtsp://frigate:8554/room_a_sub
 
+  room-b-camera:
+    <<: *adapter
+    environment:
+      <<: *adapter-environment
+      DEVICE_ID: room-b-camera
+      SOURCE_KIND: gstreamer
+      SOURCE_URI: rtsp://frigate:8554/room_b_sub
+
+  voice-pe:
+    <<: *adapter
+    environment:
+      <<: *adapter-environment
+      DEVICE_ID: voice-pe
+      SOURCE_KIND: silence
+      STREAM_RECEIVED: "true"
+    ports:
+      - 8100:8090
+
 volumes:
   sink_captures:
 
