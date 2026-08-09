@@ -38,6 +38,7 @@ def write_config() -> None:
         "gstreamer": f"gst,{SOURCE_URI}",
     }[SOURCE_KIND]
     config = f"""poll_method epoll
+net_interface eth0
 sip_listen 0.0.0.0:5060
 call_max_calls 1
 audio_player pulse,intercom
