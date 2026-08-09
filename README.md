@@ -80,11 +80,13 @@ Disconnects are authoritative and require no action at the physical device:
 curl -fsS -X DELETE http://127.0.0.1:8099/devices/room-a-camera/connect
 ```
 
-The `voice-pe` adapter runs on the host network so its standalone Sendspin
-server can advertise directly to the Voice PE. Received conference audio stays
+The `voice-pe` adapter runs on the host network. Received conference audio stays
 lossless: Pulse PCM is resampled into a local WAV FIFO and Sendspin negotiates
-PCM or FLAC with the physical player. Music Assistant and Home Assistant media
-playback are not in the intercom audio path.
+PCM or FLAC with the physical player. An opt-in microphone bridge is prepared
+under [`voice-pe-esphome`](voice-pe-esphome/README.md), but the live participant
+remains receive-only until that firmware and its dedicated token are installed
+and verified on the Docker host. Music Assistant and Home Assistant media playback
+are not in the intercom audio path.
 
 An ordinary SIP softphone can eventually use extension `9000` and join the same
 on-demand `intercom` conference once a secured SIP profile is intentionally

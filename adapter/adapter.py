@@ -7,6 +7,7 @@ import json
 import os
 import re
 import socket
+import socket as udp_socket
 import subprocess
 import threading
 import time
@@ -23,16 +24,23 @@ CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
 SENDSPIN_RECEIVED = os.environ.get("SENDSPIN_RECEIVED", "false").lower() == "true"
 SENDSPIN_PORT = int(os.environ.get("SENDSPIN_PORT", "8927"))
 SENDSPIN_CLIENT_URL = os.environ.get("SENDSPIN_CLIENT_URL", "")
+UDP_REMOTE_HOST = os.environ.get("UDP_REMOTE_HOST", "")
+UDP_REMOTE_PORT = int(os.environ.get("UDP_REMOTE_PORT", "18555"))
+UDP_TOKEN = os.environ.get("UDP_TOKEN", "")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 FREESWITCH_URI = os.environ.get("FREESWITCH_URI", "sip:9000@freeswitch:5070")
 CONFIG = Path("/run/intercom/baresip")
 
 if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", DEVICE_ID):
     raise SystemExit("DEVICE_ID must contain only lowercase letters, digits, and hyphens")
-if SOURCE_KIND not in {"silence", "sine", "gstreamer"}:
-    raise SystemExit("SOURCE_KIND must be silence, sine, or gstreamer")
+if SOURCE_KIND not in {"silence", "sine", "gstreamer", "udp-pcm"}:
+    raise SystemExit("SOURCE_KIND must be silence, sine, gstreamer, or udp-pcm")
 if SOURCE_KIND == "gstreamer" and not SOURCE_URI.startswith(("rtsp://", "http://", "https://")):
     raise SystemExit("gstreamer SOURCE_URI must be an RTSP or HTTP URL")
+if SOURCE_KIND == "udp-pcm" and (not UDP_REMOTE_HOST or len(UDP_TOKEN) < 24):
+    raise SystemExit("udp-pcm requires UDP_REMOTE_HOST and a UDP_TOKEN of at least 24 characters")
+
+connected = False
 
 
 def media_ip() -> str:
@@ -53,6 +61,7 @@ def write_config() -> None:
         "silence": "ausine,10",
         "sine": f"ausine,{int(os.environ.get('SINE_FREQUENCY', '440'))}",
         "gstreamer": f"gst,{SOURCE_URI}",
+        "udp-pcm": "pulse,voice_pe_intercom",
     }[SOURCE_KIND]
     config = f"""poll_method epoll
 net_interface {bind_ip}
@@ -96,6 +105,55 @@ def start_pulse() -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
+    if SOURCE_KIND == "udp-pcm":
+        fifo = CONFIG / "microphone.pcm"
+        fifo.unlink(missing_ok=True)
+        os.mkfifo(fifo)
+        subprocess.run(
+            [
+                "pactl", "load-module", "module-pipe-source",
+                "source_name=voice_pe_intercom", f"file={fifo}", "format=s16le",
+                "rate=16000", "channels=1",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+
+def start_udp_microphone() -> None:
+    """Hold a short Voice PE stream lease and feed its PCM into PulseAudio."""
+    if SOURCE_KIND != "udp-pcm":
+        return
+
+    fifo = CONFIG / "microphone.pcm"
+
+    def receive() -> None:
+        target = (UDP_REMOTE_HOST, UDP_REMOTE_PORT)
+        subscriber = udp_socket.socket(udp_socket.AF_INET, udp_socket.SOCK_DGRAM)
+        subscriber.bind(("0.0.0.0", 0))
+        subscriber.settimeout(0.25)
+        pipe_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        last_heartbeat = 0.0
+        was_connected = False
+        while True:
+            now = time.monotonic()
+            if connected and now - last_heartbeat >= 1.0:
+                subscriber.sendto(f"START {UDP_TOKEN}".encode(), target)
+                last_heartbeat = now
+            if was_connected and not connected:
+                subscriber.sendto(f"STOP {UDP_TOKEN}".encode(), target)
+            was_connected = connected
+            try:
+                payload, source = subscriber.recvfrom(2048)
+            except TimeoutError:
+                continue
+            if connected and source[0] == UDP_REMOTE_HOST:
+                try:
+                    os.write(pipe_fd, payload)
+                except BlockingIOError:
+                    pass
+
+    threading.Thread(target=receive, name="udp-microphone", daemon=True).start()
 
 
 def start_capture() -> subprocess.Popen[bytes] | None:
@@ -149,6 +207,7 @@ def start_sendspin() -> list[subprocess.Popen[Any]]:
 
 write_config()
 start_pulse()
+start_udp_microphone()
 capture = start_capture()
 sendspin_processes = start_sendspin()
 for process_name, process in zip(("sendspin", "parec", "pcm bridge"), sendspin_processes):
@@ -176,7 +235,6 @@ def drain_output() -> None:
 
 threading.Thread(target=drain_output, daemon=True).start()
 lock = threading.Lock()
-connected = False
 
 
 def command(value: str) -> None:

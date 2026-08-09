@@ -1,0 +1,15 @@
+# Add this package to the Voice PE configuration maintained by ESPHome Device
+# Builder. Keep the token in that builder's secrets.yaml; do not commit it.
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [udp_microphone]
+
+udp_microphone:
+  microphone:
+    microphone: i2s_mics
+    channels: 0
+    gain_factor: 4
+  port: 18555
+  token: !secret intercom_microphone_token

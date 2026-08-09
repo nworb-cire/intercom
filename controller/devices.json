@@ -39,6 +39,6 @@
     "adapter_url": "http://172.30.0.1:8088",
     "can_transmit": false,
     "can_receive": true,
-    "physical_protocol": "standalone Sendspin over lossless PCM"
+    "physical_protocol": "standalone Sendspin; leased UDP microphone bridge prepared but not deployed"
   }
 }
