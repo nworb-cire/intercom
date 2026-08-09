@@ -113,6 +113,8 @@ services:
       context: ../intercom/adapter
     restart: unless-stopped
     network_mode: host
+    security_opt:
+      - apparmor=unconfined
     depends_on:
       freeswitch:
         condition: service_healthy
