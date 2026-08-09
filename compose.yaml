@@ -17,6 +17,10 @@ services:
       context: ../intercom/freeswitch
     container_name: intercom-freeswitch
     restart: unless-stopped
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
     networks:
       media:
         ipv4_address: 172.30.0.2
