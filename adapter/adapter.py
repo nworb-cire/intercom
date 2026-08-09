@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -30,16 +31,27 @@ if SOURCE_KIND == "gstreamer" and not SOURCE_URI.startswith(("rtsp://", "http://
     raise SystemExit("gstreamer SOURCE_URI must be an RTSP or HTTP URL")
 
 
+def media_ip() -> str:
+    match = re.search(r"@([^:;>]+)", FREESWITCH_URI)
+    if not match:
+        raise SystemExit("FREESWITCH_URI must contain a host after @")
+    target = socket.gethostbyname(match.group(1))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((target, 5070))
+        return str(probe.getsockname()[0])
+
+
 def write_config() -> None:
     CONFIG.mkdir(parents=True, exist_ok=True)
+    bind_ip = media_ip()
     source = {
         "silence": "ausine,0",
         "sine": f"ausine,{int(os.environ.get('SINE_FREQUENCY', '440'))}",
         "gstreamer": f"gst,{SOURCE_URI}",
     }[SOURCE_KIND]
     config = f"""poll_method epoll
-net_interface eth0
-sip_listen 0.0.0.0:5060
+net_interface {bind_ip}
+sip_listen {bind_ip}:5060
 call_max_calls 1
 audio_player pulse,intercom
 audio_source {source}
