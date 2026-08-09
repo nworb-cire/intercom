@@ -14,8 +14,8 @@
       <param name="conference-flags" value="audio-always"/>
       <!-- Fail closed until the authoritative controller applies capabilities/routes. -->
       <param name="member-flags" value="mute|deaf|nomoh|skip-dtmf"/>
-      <param name="enter-sound" value="none"/>
-      <param name="exit-sound" value="none"/>
+      <param name="enter-sound" value="silence_stream://10"/>
+      <param name="exit-sound" value="silence_stream://10"/>
       <param name="announce-count" value="0"/>
       <param name="verbose-events" value="true"/>
     </profile>
