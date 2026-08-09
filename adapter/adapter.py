@@ -300,7 +300,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         global stream_clients, stream_pcm_bytes, stream_peak
-        if self.path == "/stream.wav" and music_assistant is not None:
+        # The stream is a reusable adapter output.  A receiver is selected by
+        # the application layer (for example, Home Assistant's native
+        # ESPHome media player), so it must not be tied to Music Assistant
+        # being configured in this process.
+        if self.path == "/stream.wav":
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Cache-Control", "no-store")
@@ -360,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def do_HEAD(self) -> None:
-        if self.path != "/stream.wav" or music_assistant is None:
+        if self.path != "/stream.wav":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         self.send_response(HTTPStatus.OK)
