@@ -42,8 +42,9 @@ an authenticated subscriber renews a five-second lease.
 
 After the firmware is verified, change the Docker host's `voice-pe` service to
 `SOURCE_KIND: udp-pcm` and supply `UDP_REMOTE_HOST=192.0.2.20`,
-`UDP_REMOTE_PORT=18555`, and `UDP_TOKEN` from the Portainer environment. Only
-then mark the device `can_transmit: true` in `controller/devices.json`.
+`UDP_REMOTE_PORT=18555`, and `UDP_TOKEN` from the Portainer environment. Then
+have the application include `"can_transmit": true` in its Voice PE connection
+request to the stateless intercom controller.
 
 The component binds UDP port `18555` on the Voice PE. A valid `START <token>`
 datagram leases the stream to that sender's address and source port. Renewals

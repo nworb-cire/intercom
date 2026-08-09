@@ -1,30 +1,76 @@
 #!/usr/bin/env python3
-"""Small authoritative control plane for one FreeSWITCH conference."""
+"""Stateless, fail-closed control plane for one FreeSWITCH conference."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 
 ROOM = os.environ.get("INTERCOM_ROOM", "intercom")
 ESL_HOST = os.environ.get("FREESWITCH_ESL_HOST", "freeswitch")
 ESL_PORT = int(os.environ.get("FREESWITCH_ESL_PORT", "8021"))
 ESL_PASSWORD = os.environ["INTERCOM_ESL_PASSWORD"]
-DEVICES = json.loads(Path(os.environ.get("DEVICES_FILE", "/app/devices.json")).read_text())
+DEVICE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+operations_lock = threading.Lock()
 
 
 class Error(RuntimeError):
     pass
+
+
+class ValidationError(Error):
+    pass
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    """Application-supplied adapter details for one connection operation."""
+
+    device_id: str
+    adapter_url: str | None
+    can_transmit: bool
+    can_receive: bool
+
+
+def endpoint_from_body(body: Any) -> Endpoint:
+    if not isinstance(body, dict):
+        raise ValidationError("request body must be an object")
+    device_id = body.get("device_id")
+    adapter_url = body.get("adapter_url")
+    can_transmit = body.get("can_transmit")
+    can_receive = body.get("can_receive")
+    if not isinstance(device_id, str) or not DEVICE_ID_RE.fullmatch(device_id):
+        raise ValidationError("device_id must contain lowercase letters, digits, and hyphens")
+    if adapter_url is not None:
+        if not isinstance(adapter_url, str):
+            raise ValidationError("adapter_url must be a string or null")
+        parsed = urlsplit(adapter_url)
+        if (
+            parsed.scheme != "http"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in ("", "/")
+        ):
+            raise ValidationError("adapter_url must be an HTTP base URL without credentials, query, or path")
+        adapter_url = adapter_url.rstrip("/")
+    if not isinstance(can_transmit, bool) or not isinstance(can_receive, bool):
+        raise ValidationError("can_transmit and can_receive must be booleans")
+    return Endpoint(device_id, adapter_url, can_transmit, can_receive)
 
 
 class ESL:
@@ -66,14 +112,14 @@ class ESL:
             return result
 
 
-def adapter_request(device_id: str, method: str) -> dict[str, Any]:
-    url = DEVICES[device_id]["adapter_url"] + "/connect"
-    request = urllib.request.Request(url, method=method)
+def adapter_request(adapter_url: str, method: str) -> dict[str, Any]:
+    request = urllib.request.Request(adapter_url + "/connect", method=method)
     try:
         with urllib.request.urlopen(request, timeout=8) as response:
             return json.load(response)
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise Error(f"adapter {device_id} failed: {exc.reason if hasattr(exc, 'reason') else exc}") from exc
+        reason = exc.reason if hasattr(exc, "reason") else exc
+        raise Error(f"adapter failed: {reason}") from exc
 
 
 def conferences() -> list[dict[str, Any]]:
@@ -99,59 +145,96 @@ def session() -> dict[str, Any]:
     return {"room": ROOM, "active": bool(conference), "members": normalized}
 
 
-def member_map() -> dict[str, int]:
-    return {member["device_id"]: member["member_id"] for member in session()["members"]}
+def member_for_device(device_id: str) -> dict[str, Any] | None:
+    matches = [member for member in session()["members"] if member["device_id"] == device_id]
+    if len(matches) > 1:
+        raise Error(f"multiple conference members identify as {device_id}")
+    return matches[0] if matches else None
 
 
-def wait_for_member(device_id: str, present: bool, timeout: float = 8) -> None:
+def wait_for_member(device_id: str, present: bool, timeout: float = 8) -> dict[str, Any] | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if (device_id in member_map()) is present:
-            return
+        member = member_for_device(device_id)
+        if (member is not None) is present:
+            return member
         time.sleep(0.2)
     raise Error(f"timed out waiting for {device_id} to {'join' if present else 'leave'}")
 
 
-def enforce_capabilities(device_id: str) -> None:
-    members = member_map()
-    member_id = members[device_id]
-    device = DEVICES[device_id]
-    ESL().api(f"conference {ROOM} {'unmute' if device['can_transmit'] else 'mute'} {member_id} quiet")
-    ESL().api(f"conference {ROOM} {'undeaf' if device['can_receive'] else 'deaf'} {member_id}")
+def enforce_capabilities(member_id: int, endpoint: Endpoint) -> None:
+    ESL().api(f"conference {ROOM} {'unmute' if endpoint.can_transmit else 'mute'} {member_id} quiet")
+    ESL().api(f"conference {ROOM} {'undeaf' if endpoint.can_receive else 'deaf'} {member_id}")
 
     # Deny all new cross-member paths until the application enables each one.
-    for other_id in members.values():
+    for other in session()["members"]:
+        other_id = other["member_id"]
         if other_id == member_id:
             continue
         ESL().api(f"conference {ROOM} relate {member_id} {other_id} nospeak")
         ESL().api(f"conference {ROOM} relate {other_id} {member_id} nospeak")
 
 
+def connect(endpoint: Endpoint) -> dict[str, Any]:
+    """Connect or re-authorize an endpoint without retaining its definition."""
+    with operations_lock:
+        member = member_for_device(endpoint.device_id)
+        if member is None:
+            if endpoint.adapter_url is None:
+                raise Error("adapter_url is required to connect a device that is not already in the conference")
+            adapter_request(endpoint.adapter_url, "POST")
+            try:
+                member = wait_for_member(endpoint.device_id, True)
+            except Error:
+                adapter_request(endpoint.adapter_url, "DELETE")
+                raise
+        assert member is not None
+        enforce_capabilities(member["member_id"], endpoint)
+        return session()
+
+
+def disconnect(endpoint: Endpoint) -> dict[str, Any]:
+    """Disconnect an endpoint using application-supplied adapter details."""
+    with operations_lock:
+        member = member_for_device(endpoint.device_id)
+        if member is not None:
+            ESL().api(f"conference {ROOM} hup {member['member_id']}")
+        if endpoint.adapter_url is not None:
+            adapter_request(endpoint.adapter_url, "DELETE")
+        if member is not None:
+            wait_for_member(endpoint.device_id, False)
+        return session()
+
+
 def set_route(source: str, sink: str, enabled: bool) -> None:
     if source == sink:
         raise Error("source and sink must be different devices")
-    members = member_map()
-    if source not in members or sink not in members:
-        raise Error("both route endpoints must be connected")
-    if not DEVICES[source]["can_transmit"]:
-        raise Error(f"{source} has no transmit direction")
-    if not DEVICES[sink]["can_receive"]:
-        raise Error(f"{sink} has no receive direction")
-    action = "clear" if enabled else "nospeak"
-    ESL().api(f"conference {ROOM} relate {members[source]} {members[sink]} {action}")
+    with operations_lock:
+        source_member = member_for_device(source)
+        sink_member = member_for_device(sink)
+        if source_member is None or sink_member is None:
+            raise Error("both route endpoints must be connected")
+        action = "clear" if enabled else "nospeak"
+        ESL().api(f"conference {ROOM} relate {source_member['member_id']} {sink_member['member_id']} {action}")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "intercom-controller/0.1"
+    server_version = "intercom-controller/0.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.address_string()} {fmt % args}", flush=True)
 
     def body(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > 65536:
-            raise Error("request body too large")
-        return json.loads(self.rfile.read(length) or b"{}")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValidationError("invalid Content-Length") from exc
+        if length < 0 or length > 65536:
+            raise ValidationError("request body must be at most 65536 bytes")
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError as exc:
+            raise ValidationError("request body must be valid JSON") from exc
 
     def reply(self, status: int, payload: Any) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode()
@@ -166,37 +249,17 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET" and parts == ["health"]:
             status = ESL().api("status").splitlines()[0]
             return HTTPStatus.OK, {"ok": True, "freeswitch": status}
-        if self.command == "GET" and parts == ["devices"]:
-            return HTTPStatus.OK, DEVICES
         if self.command == "GET" and parts == ["session"]:
             return HTTPStatus.OK, session()
-        if len(parts) == 3 and parts[0] == "devices" and parts[2] == "connect":
-            device_id = parts[1]
-            if device_id not in DEVICES:
-                return HTTPStatus.NOT_FOUND, {"error": "unknown device"}
-            if self.command == "POST":
-                adapter_request(device_id, "POST")
-                try:
-                    wait_for_member(device_id, True)
-                except Error:
-                    adapter_request(device_id, "DELETE")
-                    raise
-                enforce_capabilities(device_id)
-                return HTTPStatus.OK, session()
-            if self.command == "DELETE":
-                existing = member_map().get(device_id)
-                if existing is not None:
-                    ESL().api(f"conference {ROOM} hup {existing}")
-                adapter_request(device_id, "DELETE")
-                wait_for_member(device_id, False)
-                return HTTPStatus.OK, session()
+        if self.command == "POST" and parts == ["connections"]:
+            return HTTPStatus.OK, connect(endpoint_from_body(self.body()))
+        if self.command == "DELETE" and parts == ["connections"]:
+            return HTTPStatus.OK, disconnect(endpoint_from_body(self.body()))
         if self.command == "PUT" and len(parts) == 3 and parts[0] == "routes":
             source, sink = parts[1:]
-            if source not in DEVICES or sink not in DEVICES:
-                return HTTPStatus.NOT_FOUND, {"error": "unknown device"}
             enabled = self.body().get("enabled")
             if not isinstance(enabled, bool):
-                return HTTPStatus.BAD_REQUEST, {"error": "enabled must be boolean"}
+                raise ValidationError("enabled must be boolean")
             set_route(source, sink, enabled)
             return HTTPStatus.OK, {"source": source, "sink": sink, "enabled": enabled}
         return HTTPStatus.NOT_FOUND, {"error": "not found"}
@@ -216,7 +279,9 @@ class Handler(BaseHTTPRequestHandler):
     def handle_request(self) -> None:
         try:
             status, payload = self.dispatch()
-        except (Error, json.JSONDecodeError) as exc:
+        except ValidationError as exc:
+            status, payload = HTTPStatus.BAD_REQUEST, {"error": str(exc)}
+        except Error as exc:
             status, payload = HTTPStatus.CONFLICT, {"error": str(exc)}
         except Exception as exc:  # keep errors JSON and avoid leaking tracebacks to clients
             print(f"request failed: {type(exc).__name__}: {exc}", flush=True)

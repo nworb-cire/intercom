@@ -2,8 +2,9 @@
 
 This directory contains a deliberately small FreeSWITCH intercom proof of
 concept. FreeSWITCH and `mod_conference` remain the media engine. The Python
-control service owns device identity and translates a directional routing
-matrix into conference member controls.
+control service is stateless: the application supplies an adapter descriptor
+and capabilities for each connection operation, while FreeSWITCH is the source
+of truth for live conference membership.
 
 Physical devices are **not** assumed to support SIP. Each adapter has a
 device-native side and a nominally duplex media side. The included adapter
@@ -45,39 +46,34 @@ startup and is never stored in Git.
 
 ## Exercise the routing model
 
-Connect two duplex test adapters:
+The local scripts contain the two synthetic adapter descriptors. They are
+deliberately application data rather than a controller registry; neither script
+contains a secret.
 
 ```sh
-curl -fsS -X POST http://127.0.0.1:8099/devices/lab-a/connect
-curl -fsS -X POST http://127.0.0.1:8099/devices/lab-b/connect
+./intercom/scripts/connect-lab-clients.sh
 curl -fsS http://127.0.0.1:8099/session | jq
 ```
 
-Enable both directions:
-
-```sh
-curl -fsS -X PUT -H 'Content-Type: application/json' \
-  -d '{"enabled":true}' http://127.0.0.1:8099/routes/lab-a/lab-b
-curl -fsS -X PUT -H 'Content-Type: application/json' \
-  -d '{"enabled":true}' http://127.0.0.1:8099/routes/lab-b/lab-a
-```
-
-The first path below connects a real camera microphone to the speaker-only
+The following commands connect a real camera microphone to the speaker-only
 capture adapter. Its received audio is kept in three rotating WAV segments in
 the `intercom_sink_captures` volume.
 
 ```sh
-curl -fsS -X POST http://127.0.0.1:8099/devices/room-a-camera/connect
-curl -fsS -X POST http://127.0.0.1:8099/devices/lab-speaker/connect
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"device_id":"room-a-camera","adapter_url":"http://room-a-camera:8080","can_transmit":true,"can_receive":false}' \
+  http://127.0.0.1:8099/connections
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"device_id":"lab-speaker","adapter_url":"http://lab-speaker:8080","can_transmit":false,"can_receive":true}' \
+  http://127.0.0.1:8099/connections
 curl -fsS -X PUT -H 'Content-Type: application/json' \
-  -d '{"enabled":true}' \
-  http://127.0.0.1:8099/routes/room-a-camera/lab-speaker
+  -d '{"enabled":true}' http://127.0.0.1:8099/routes/room-a-camera/lab-speaker
 ```
 
-Disconnects are authoritative and require no action at the physical device:
+Disconnect the synthetic test clients:
 
 ```sh
-curl -fsS -X DELETE http://127.0.0.1:8099/devices/room-a-camera/connect
+./intercom/scripts/disconnect-lab-clients.sh
 ```
 
 The `voice-pe` adapter runs on the host network. Received conference audio stays
@@ -101,8 +97,10 @@ leaves.
 - `can_receive: false` causes it to apply conference `deaf`.
 - A disabled route from A to B applies `relate A B nospeak`.
 - An enabled route clears that A-to-B relationship.
-- Device names, capabilities, and adapter URLs live in `devices.json`, above
-  the media layer.
+- Device names, capabilities, and adapter URLs are supplied by the application
+  with each connect or disconnect request; the controller does not retain a
+  device registry. `adapter_url` may be `null` when the participant has already
+  joined FreeSWITCH directly.
 - The API starts from deny-by-default relationships when a participant joins;
   callers must explicitly enable desired directions.
 
