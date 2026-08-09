@@ -1,0 +1,9 @@
+<configuration name="switch.conf" description="Intercom core settings">
+  <settings>
+    <param name="rtp-start-port" value="16384"/>
+    <param name="rtp-end-port" value="16447"/>
+    <param name="max-sessions" value="40"/>
+    <param name="sessions-per-second" value="10"/>
+    <param name="loglevel" value="info"/>
+  </settings>
+</configuration>

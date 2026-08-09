@@ -1,0 +1,23 @@
+<configuration name="conference.conf" description="Intercom conference">
+  <caller-controls>
+    <group name="none"/>
+  </caller-controls>
+  <profiles>
+    <profile name="wideband">
+      <param name="domain" value="$${domain}"/>
+      <param name="rate" value="16000"/>
+      <param name="interval" value="20"/>
+      <param name="channels" value="1"/>
+      <param name="energy-level" value="0"/>
+      <param name="comfort-noise" value="false"/>
+      <param name="caller-controls" value="none"/>
+      <param name="conference-flags" value="audio-always"/>
+      <!-- Fail closed until the authoritative controller applies capabilities/routes. -->
+      <param name="member-flags" value="mute|deaf|nomoh|skip-dtmf"/>
+      <param name="enter-sound" value="none"/>
+      <param name="exit-sound" value="none"/>
+      <param name="announce-count" value="0"/>
+      <param name="verbose-events" value="true"/>
+    </profile>
+  </profiles>
+</configuration>

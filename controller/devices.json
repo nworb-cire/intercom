@@ -1,0 +1,30 @@
+{
+  "lab-a": {
+    "name": "Synthetic duplex A",
+    "adapter_url": "http://lab-a:8080",
+    "can_transmit": true,
+    "can_receive": true,
+    "physical_protocol": "synthetic test tone"
+  },
+  "lab-b": {
+    "name": "Synthetic duplex B",
+    "adapter_url": "http://lab-b:8080",
+    "can_transmit": true,
+    "can_receive": true,
+    "physical_protocol": "synthetic test tone"
+  },
+  "lab-speaker": {
+    "name": "Speaker-only capture sink",
+    "adapter_url": "http://lab-speaker:8080",
+    "can_transmit": false,
+    "can_receive": true,
+    "physical_protocol": "rotating WAV capture"
+  },
+  "room-a-camera": {
+    "name": "Room A camera microphone",
+    "adapter_url": "http://room-a-camera:8080",
+    "can_transmit": true,
+    "can_receive": false,
+    "physical_protocol": "RTSP via local go2rtc"
+  }
+}

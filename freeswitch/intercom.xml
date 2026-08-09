@@ -1,0 +1,8 @@
+<include>
+  <extension name="local-intercom">
+    <condition field="destination_number" expression="^9000$">
+      <action application="answer"/>
+      <action application="conference" data="intercom@wideband"/>
+    </condition>
+  </extension>
+</include>

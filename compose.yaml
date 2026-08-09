@@ -1,0 +1,89 @@
+x-adapter: &adapter
+  build:
+    context: ../intercom/adapter
+  restart: unless-stopped
+  networks:
+    - intercom
+    - web
+  depends_on:
+    freeswitch:
+      condition: service_healthy
+  environment: &adapter-environment
+    FREESWITCH_URI: sip:9000@freeswitch:5070
+
+services:
+  freeswitch:
+    build:
+      context: ../intercom/freeswitch
+    container_name: intercom-freeswitch
+    restart: unless-stopped
+    networks:
+      - intercom
+    environment:
+      INTERCOM_ESL_PASSWORD: ${INTERCOM_ESL_PASSWORD:?INTERCOM_ESL_PASSWORD is required}
+      SOUND_RATES: "8000:16000"
+    ports:
+      - 5060:5060/tcp
+      - 5060:5060/udp
+      - 5080:5080/tcp
+      - 5080:5080/udp
+      - 16384-16447:16384-16447/udp
+
+  controller:
+    build:
+      context: ../intercom/controller
+    container_name: intercom-controller
+    restart: unless-stopped
+    networks:
+      - intercom
+    depends_on:
+      freeswitch:
+        condition: service_healthy
+    environment:
+      FREESWITCH_ESL_HOST: freeswitch
+      INTERCOM_ESL_PASSWORD: ${INTERCOM_ESL_PASSWORD:?INTERCOM_ESL_PASSWORD is required}
+    ports:
+      - 127.0.0.1:8099:8099
+
+  lab-a:
+    <<: *adapter
+    environment:
+      <<: *adapter-environment
+      DEVICE_ID: lab-a
+      SOURCE_KIND: sine
+      SINE_FREQUENCY: "440"
+
+  lab-b:
+    <<: *adapter
+    environment:
+      <<: *adapter-environment
+      DEVICE_ID: lab-b
+      SOURCE_KIND: sine
+      SINE_FREQUENCY: "660"
+
+  lab-speaker:
+    <<: *adapter
+    environment:
+      <<: *adapter-environment
+      DEVICE_ID: lab-speaker
+      SOURCE_KIND: silence
+      CAPTURE_RECEIVED: "true"
+    volumes:
+      - sink_captures:/captures
+
+  room-a-camera:
+    <<: *adapter
+    environment:
+      <<: *adapter-environment
+      DEVICE_ID: room-a-camera
+      SOURCE_KIND: gstreamer
+      SOURCE_URI: rtsp://frigate:8554/room_a_sub
+
+volumes:
+  sink_captures:
+
+networks:
+  intercom:
+    internal: true
+  web:
+    external: true
