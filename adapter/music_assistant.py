@@ -69,7 +69,9 @@ class MusicAssistantSink:
             with urllib.request.urlopen(request, timeout=15) as response:
                 payload = response.read()
         except urllib.error.HTTPError as exc:
-            raise MusicAssistantError(f"Music Assistant returned HTTP {exc.code}") from exc
+            status = exc.code
+            exc.close()
+            raise MusicAssistantError(f"Music Assistant returned HTTP {status}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise MusicAssistantError("Music Assistant is unavailable") from exc
         return json.loads(payload) if payload else None
@@ -80,6 +82,12 @@ class MusicAssistantSink:
             queue_id=self.player_id,
             media=self.stream_url,
         )
+
+    def player_state(self) -> str:
+        player = self.command("players/get", player_id=self.player_id)
+        if not isinstance(player, dict) or not isinstance(player.get("state"), str):
+            raise MusicAssistantError("Music Assistant returned an invalid player state")
+        return player["state"]
 
     def stop(self) -> None:
         self.command("player_queues/stop", queue_id=self.player_id)

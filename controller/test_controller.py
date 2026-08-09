@@ -119,10 +119,10 @@ class ConnectionTests(unittest.TestCase):
         {"device_id": "lab-a", "member_id": 1}, {"device_id": "lab-b", "member_id": 2}
     ]})
     @patch.object(controller, "ESL", FakeESL)
-    def test_reauthorizes_existing_member_without_adapter_call(self, _session):
+    def test_reauthorizes_existing_member_and_reasserts_adapter_state(self, _session):
         with patch.object(controller, "adapter_request") as adapter_request:
             controller.connect(LAB_A)
-        adapter_request.assert_not_called()
+        adapter_request.assert_called_once_with("http://lab-a:8080", "POST")
         self.assertEqual(FakeESL.commands, [
             "conference intercom unmute 1 quiet",
             "conference intercom undeaf 1",
@@ -134,11 +134,13 @@ class ConnectionTests(unittest.TestCase):
         {"device_id": "lab-a", "member_id": 1}, {"device_id": "lab-b", "member_id": 2}
     ]})
     @patch.object(controller, "ESL", FakeESL)
-    def test_applies_requested_gain_on_each_connection(self, _session):
+    @patch.object(controller, "adapter_request")
+    def test_applies_requested_gain_on_each_connection(self, adapter_request, _session):
         endpoint = controller.Endpoint(
             "lab-a", "http://lab-a:8080", True, True, controller.GainSettings(4, -1, 1000)
         )
         controller.connect(endpoint)
+        adapter_request.assert_called_once_with("http://lab-a:8080", "POST")
         self.assertEqual(FakeESL.commands[-3:], [
             "conference intercom volume_in 1 4",
             "conference intercom volume_out 1 -1",

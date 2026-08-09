@@ -56,6 +56,7 @@ stream_processes: set[subprocess.Popen[bytes]] = set()
 stream_clients = 0
 stream_pcm_bytes = 0
 stream_peak = 0
+music_assistant_state = "disabled" if not MUSIC_ASSISTANT_RECEIVED else "unknown"
 music_assistant = (
     MusicAssistantSink(
         MUSIC_ASSISTANT_URL,
@@ -258,6 +259,33 @@ def command(value: str) -> None:
     baresip.stdin.flush()
 
 
+def maintain_music_assistant_playback() -> None:
+    """Repair device playback drift while this adapter owns an active session."""
+    global music_assistant_state
+    assert music_assistant is not None
+    while True:
+        delay = 1
+        with lock:
+            if not connected:
+                music_assistant_state = "idle"
+            else:
+                try:
+                    music_assistant_state = music_assistant.player_state()
+                    if music_assistant_state != "playing":
+                        print(
+                            f"Music Assistant player drifted to {music_assistant_state}; "
+                            "restarting intercom playback",
+                            flush=True,
+                        )
+                        music_assistant.play()
+                        music_assistant_state = "playing"
+                except MusicAssistantError as exc:
+                    music_assistant_state = "unavailable"
+                    delay = 5
+                    print(f"Music Assistant playback check failed: {exc}", flush=True)
+        time.sleep(delay)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.address_string()} {fmt % args}", flush=True)
@@ -327,6 +355,7 @@ class Handler(BaseHTTPRequestHandler):
             "connected": connected,
             "capture": CAPTURE_RECEIVED,
             "music_assistant": MUSIC_ASSISTANT_RECEIVED,
+            "music_assistant_state": music_assistant_state,
             **stream_status,
         })
 
@@ -340,26 +369,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:
-        global connected
+        global connected, music_assistant_state
         if self.path != "/connect":
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         with lock:
+            newly_dialed = False
             if not connected:
                 command(f"/dial {FREESWITCH_URI}")
-                try:
-                    if music_assistant is not None:
-                        music_assistant.play()
-                    connected = True
-                except MusicAssistantError as exc:
+                newly_dialed = True
+            try:
+                if music_assistant is not None:
+                    music_assistant.play()
+                    music_assistant_state = "playing"
+                connected = True
+            except MusicAssistantError as exc:
+                if newly_dialed:
                     command("/hangup")
-                    print(f"Music Assistant play failed: {exc}", flush=True)
-                    self.reply(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
-                    return
+                print(f"Music Assistant play failed: {exc}", flush=True)
+                self.reply(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+                return
         self.reply(HTTPStatus.ACCEPTED, {"connected": connected})
 
     def do_DELETE(self) -> None:
-        global connected
+        global connected, music_assistant_state
         if self.path != "/connect":
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -374,6 +407,7 @@ class Handler(BaseHTTPRequestHandler):
                         print(f"Music Assistant stop failed: {exc}", flush=True)
                 command("/hangup")
                 connected = False
+                music_assistant_state = "idle"
             with stream_lock:
                 for process in tuple(stream_processes):
                     process.terminate()
@@ -385,4 +419,10 @@ class Handler(BaseHTTPRequestHandler):
 
 # Give Baresip time to load modules before reporting a usable HTTP endpoint.
 time.sleep(1)
+if music_assistant is not None:
+    threading.Thread(
+        target=maintain_music_assistant_playback,
+        name="music-assistant-watchdog",
+        daemon=True,
+    ).start()
 ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler).serve_forever()

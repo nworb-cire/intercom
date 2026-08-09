@@ -11,6 +11,7 @@ from music_assistant import MusicAssistantError, MusicAssistantSink, pcm_peak, w
 class FakeApiHandler(BaseHTTPRequestHandler):
     requests = []
     status = 200
+    response = None
 
     def log_message(self, _format, *_args):
         return
@@ -21,7 +22,7 @@ class FakeApiHandler(BaseHTTPRequestHandler):
         self.send_response(self.status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b"null")
+        self.wfile.write(json.dumps(self.response).encode())
 
 
 class MusicAssistantSinkTests(unittest.TestCase):
@@ -39,6 +40,7 @@ class MusicAssistantSinkTests(unittest.TestCase):
     def setUp(self):
         FakeApiHandler.requests = []
         FakeApiHandler.status = 200
+        FakeApiHandler.response = None
         self.tempdir = tempfile.TemporaryDirectory()
         self.token_file = Path(self.tempdir.name) / "token"
         self.token_file.write_text("test-token-that-is-deliberately-long-enough")
@@ -72,6 +74,19 @@ class MusicAssistantSinkTests(unittest.TestCase):
             "command": "player_queues/stop",
             "args": {"queue_id": "voice-player"},
         })
+
+    def test_player_state_is_read_from_the_scoped_player(self):
+        FakeApiHandler.response = {"player_id": "voice-player", "state": "idle"}
+        self.assertEqual(self.sink.player_state(), "idle")
+        self.assertEqual(FakeApiHandler.requests[0][2], {
+            "command": "players/get",
+            "args": {"player_id": "voice-player"},
+        })
+
+    def test_invalid_player_state_is_rejected(self):
+        FakeApiHandler.response = None
+        with self.assertRaisesRegex(MusicAssistantError, "invalid player state"):
+            self.sink.player_state()
 
     def test_http_errors_do_not_include_response_or_token(self):
         FakeApiHandler.status = 401

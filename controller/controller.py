@@ -230,6 +230,10 @@ def connect(endpoint: Endpoint) -> dict[str, Any]:
             except Error:
                 adapter_request(endpoint.adapter_url, "DELETE")
                 raise
+        elif endpoint.adapter_url is not None:
+            # Reassert device-native state too. Conference membership alone does
+            # not prove that a speaker, camera, or other adapter is still active.
+            adapter_request(endpoint.adapter_url, "POST")
         assert member is not None
         enforce_capabilities(member["member_id"], endpoint)
         apply_gain(member["member_id"], endpoint.gain)
