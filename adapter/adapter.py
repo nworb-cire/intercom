@@ -47,7 +47,7 @@ audio_alert pulse,intercom
 auplay_srate 16000
 ausrc_srate 48000
 auplay_channels 1
-ausrc_channels 1
+ausrc_channels 2
 audio_level no
 rtcp_enable yes
 rtcp_mux no
