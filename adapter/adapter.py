@@ -23,8 +23,6 @@ CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
 SENDSPIN_RECEIVED = os.environ.get("SENDSPIN_RECEIVED", "false").lower() == "true"
 SENDSPIN_PORT = int(os.environ.get("SENDSPIN_PORT", "8927"))
 SENDSPIN_CLIENT_URL = os.environ.get("SENDSPIN_CLIENT_URL", "")
-BLUETOOTH_RECEIVED = os.environ.get("BLUETOOTH_RECEIVED", "false").lower() == "true"
-BLUETOOTH_DEVICE = os.environ.get("BLUETOOTH_DEVICE", "").upper()
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 FREESWITCH_URI = os.environ.get("FREESWITCH_URI", "sip:9000@freeswitch:5070")
 CONFIG = Path("/run/intercom/baresip")
@@ -35,8 +33,6 @@ if SOURCE_KIND not in {"silence", "sine", "gstreamer"}:
     raise SystemExit("SOURCE_KIND must be silence, sine, or gstreamer")
 if SOURCE_KIND == "gstreamer" and not SOURCE_URI.startswith(("rtsp://", "http://", "https://")):
     raise SystemExit("gstreamer SOURCE_URI must be an RTSP or HTTP URL")
-if BLUETOOTH_RECEIVED and not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", BLUETOOTH_DEVICE):
-    raise SystemExit("BLUETOOTH_DEVICE must be a Bluetooth MAC address")
 
 
 def media_ip() -> str:
@@ -102,68 +98,6 @@ def start_pulse() -> None:
     )
 
 
-bluetooth_ready = False
-
-
-def start_bluetooth() -> None:
-    """Keep the paired Echo connected and mirror conference audio to its A2DP sink."""
-    if not BLUETOOTH_RECEIVED:
-        return
-    subprocess.run(["pactl", "load-module", "module-bluetooth-discover"], check=True)
-    subprocess.run(["bluetoothctl", "trust", BLUETOOTH_DEVICE], check=False)
-    sink_prefix = "bluez_sink." + BLUETOOTH_DEVICE.replace(":", "_")
-
-    def maintain() -> None:
-        global bluetooth_ready
-        loopback_sink = ""
-        while True:
-            try:
-                info = subprocess.run(
-                    ["bluetoothctl", "info", BLUETOOTH_DEVICE],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                ).stdout
-                if "Connected: yes" not in info:
-                    bluetooth_ready = False
-                    subprocess.run(
-                        ["bluetoothctl", "connect", BLUETOOTH_DEVICE],
-                        timeout=15,
-                        check=False,
-                    )
-
-                sinks = subprocess.run(
-                    ["pactl", "list", "short", "sinks"],
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                ).stdout
-                sink = next(
-                    (line.split("\t", 2)[1] for line in sinks.splitlines() if sink_prefix in line),
-                    "",
-                )
-                if not sink:
-                    loopback_sink = ""
-                elif sink != loopback_sink:
-                    subprocess.run(
-                        [
-                            "pactl", "load-module", "module-loopback",
-                            "source=intercom.monitor", f"sink={sink}",
-                            "latency_msec=60", "adjust_time=1",
-                        ],
-                        check=True,
-                    )
-                    loopback_sink = sink
-                    print(f"received PCM feeding Bluetooth sink {sink}", flush=True)
-                bluetooth_ready = bool(sink)
-            except (OSError, subprocess.SubprocessError) as exc:
-                bluetooth_ready = False
-                print(f"Bluetooth maintenance failed: {type(exc).__name__}", flush=True)
-            time.sleep(3)
-
-    threading.Thread(target=maintain, daemon=True).start()
-
-
 def start_capture() -> subprocess.Popen[bytes] | None:
     if not CAPTURE_RECEIVED:
         return None
@@ -215,7 +149,6 @@ def start_sendspin() -> list[subprocess.Popen[Any]]:
 
 write_config()
 start_pulse()
-start_bluetooth()
 capture = start_capture()
 sendspin_processes = start_sendspin()
 for process_name, process in zip(("sendspin", "parec", "pcm bridge"), sendspin_processes):
@@ -269,16 +202,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        healthy = baresip.poll() is None and (not BLUETOOTH_RECEIVED or bluetooth_ready)
-        self.reply(HTTPStatus.OK if healthy else HTTPStatus.SERVICE_UNAVAILABLE, {
-            "ok": healthy,
+        self.reply(HTTPStatus.OK if baresip.poll() is None else HTTPStatus.SERVICE_UNAVAILABLE, {
+            "ok": baresip.poll() is None,
             "device_id": DEVICE_ID,
             "source_kind": SOURCE_KIND,
             "connected": connected,
             "capture": CAPTURE_RECEIVED,
             "sendspin": SENDSPIN_RECEIVED,
-            "bluetooth": BLUETOOTH_RECEIVED,
-            "bluetooth_ready": bluetooth_ready,
         })
 
     def do_POST(self) -> None:

@@ -19,12 +19,12 @@ FreeSWITCH directly.
 | Room B camera | `192.0.2.22`, RTSP, ONVIF on 2020 | second microphone-only source |
 | Reolink doorbell | `192.0.2.23`, RTSP | candidate two-way adapter; talk protocol is vendor-specific and not part of this first adapter |
 | Home Assistant Voice PE | `192.0.2.20`, ESPHome/Home Assistant | future duplex adapter target; stock firmware is not a general SIP endpoint |
-| Master bedroom Echo Dot 5th Gen | `192.0.2.24`, Bluetooth `C0:95:CF:1F:D2:56` | speaker-only sink over direct Bluetooth A2DP |
+| Amazon Echo | `192.0.2.24`, Alexa integration | future speaker sink only; excluded from the offline core because normal control depends on Amazon services |
 
 The deterministic PoC participants are two synthetic duplex adapters, one
 speaker-only capture adapter, and the real RTSP camera microphone. This proves
 the conference and adapter boundary without claiming unsupported native
-interfaces on the Voice PE.
+interfaces on the Voice PE or Echo.
 
 ## Run
 
@@ -85,13 +85,6 @@ server can advertise directly to the Voice PE. Received conference audio stays
 lossless: Pulse PCM is resampled into a local WAV FIFO and Sendspin negotiates
 PCM or FLAC with the physical player. Music Assistant and Home Assistant media
 playback are not in the intercom audio path.
-
-The `bedroom-echo` adapter also runs on the host network and registers an A2DP
-audio endpoint with the host's BlueZ service. The Echo is paired and trusted
-once on the host; the adapter reconnects it and mirrors received conference
-PCM to its PulseAudio Bluetooth sink. Home Assistant was used to initiate the
-one-time pairing prompt, but neither Home Assistant, Music Assistant, nor an
-Amazon media API is in the runtime audio path.
 
 An ordinary SIP softphone can eventually use extension `9000` and join the same
 on-demand `intercom` conference once a secured SIP profile is intentionally

@@ -40,12 +40,5 @@
     "can_transmit": false,
     "can_receive": true,
     "physical_protocol": "standalone Sendspin over lossless PCM"
-  },
-  "bedroom-echo": {
-    "name": "Master bedroom Echo Dot",
-    "adapter_url": "http://172.30.0.1:8089",
-    "can_transmit": false,
-    "can_receive": true,
-    "physical_protocol": "direct Bluetooth A2DP"
   }
 }

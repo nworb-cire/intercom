@@ -5,12 +5,10 @@ RUN apt-get update \
       baresip-core \
       baresip-gstreamer \
       baresip-x11 \
-      bluez \
       ffmpeg \
       gstreamer1.0-libav \
       gstreamer1.0-plugins-good \
       pulseaudio \
-      pulseaudio-module-bluetooth \
       pulseaudio-utils \
  && rm -rf /var/lib/apt/lists/*
 
