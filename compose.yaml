@@ -104,10 +104,19 @@ services:
       FREESWITCH_URI: sip:9000@172.30.0.2:5070
       DEVICE_ID: voice-pe
       SOURCE_KIND: silence
+      MUSIC_ASSISTANT_RECEIVED: "true"
+      MUSIC_ASSISTANT_URL: http://127.0.0.1:8095
+      MUSIC_ASSISTANT_PLAYER_ID: voice-pe-player-id
+      MUSIC_ASSISTANT_STREAM_URL: http://192.0.2.10:8088/stream.wav
+      MUSIC_ASSISTANT_TOKEN_FILE: /run/secrets/music-assistant-token
       HTTP_PORT: "8088"
+    volumes:
+      - music_assistant_auth:/run/secrets:ro
 
 volumes:
   sink_captures:
+  music_assistant_auth:
+    name: intercom_music_assistant_auth
 
 networks:
   media:

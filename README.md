@@ -76,17 +76,29 @@ Disconnect the synthetic test clients:
 ./intercom/scripts/disconnect-lab-clients.sh
 ```
 
-The `voice-pe` adapter runs on the host network and exposes received conference
-PCM as a live WAV response. The application starts and stops that URL through
-Home Assistant's native ESPHome `media_player` service; Music Assistant and
-Sendspin are not in this path. The media-player entity and stream URL are
-application settings (`HOME_ASSISTANT_MEDIA_PLAYER` and
-`INTERCOM_STREAM_URL`), while the Home Assistant token is read from the local
-`.env` file or `HOME_ASSISTANT_TOKEN`/`HOMEASSISTANT_TOKEN` and is never stored
-in Git.
+The `voice-pe` adapter runs on the host network. It exposes received conference
+PCM as a live WAV response and uses Music Assistant's authenticated JSON-RPC API
+to start and stop that URL on the Voice PE. Music Assistant owns the device's
+Sendspin connection; the adapter does not implement Sendspin itself. The token
+is scoped to the Voice PE player and stored in the
+`intercom_music_assistant_auth` Docker volume, never in Git or Portainer stack
+environment values.
+
+Provision or rotate that credential from a trusted checkout. The script emits
+only validation status, not the token:
+
+```sh
+docker volume create intercom_music_assistant_auth
+docker run --rm -i \
+  -e MUSIC_ASSISTANT_PLAYER_ID=voice-pe-player-id \
+  -v homeassistant_music_assistant_data:/data \
+  -v intercom_music_assistant_auth:/run/intercom-auth \
+  ghcr.io/music-assistant/server:latest \
+  python3 - <intercom/music-assistant/provision_token.py
+```
 
 The current local application script connects both room cameras with their
-owned gain settings, starts native Voice PE playback, and enables each route:
+owned gain settings and enables each route:
 
 ```sh
 ./intercom/scripts/connect-rooms-to-voice-pe.sh
@@ -94,12 +106,11 @@ owned gain settings, starts native Voice PE playback, and enables each route:
 ```
 
 The end-to-end smoke test temporarily routes the synthetic 440 Hz source to the
-Voice PE, invokes Home Assistant's native media-player service, and asserts that
-the Voice PE stream client consumed non-silent conference PCM. It always
-disconnects its temporary test participant:
+Voice PE, then asserts that the MA stream client consumed non-silent conference
+PCM. It always disconnects its test participants:
 
 ```sh
-./intercom/scripts/test-esphome-e2e.sh
+./intercom/scripts/test-music-assistant-e2e.sh
 ```
 
 An opt-in microphone bridge is prepared under
