@@ -91,6 +91,9 @@ module menu.so
 
 
 def start_pulse() -> None:
+    pulse_runtime = Path(os.environ["XDG_RUNTIME_DIR"]) / "pulse"
+    for stale_name in ("native", "pid"):
+        (pulse_runtime / stale_name).unlink(missing_ok=True)
     subprocess.run(
         ["pulseaudio", "--start", "--exit-idle-time=-1", "--log-target=stderr"],
         check=True,
@@ -120,7 +123,6 @@ def start_bluetooth() -> None:
     """Keep the paired Echo connected and mirror conference audio to its A2DP sink."""
     if not BLUETOOTH_RECEIVED:
         return
-    subprocess.run(["pactl", "load-module", "module-bluetooth-discover"], check=True)
     subprocess.run(["bluetoothctl", "trust", BLUETOOTH_DEVICE], check=False)
     sink_prefix = "bluez_sink." + BLUETOOTH_DEVICE.replace(":", "_")
 
