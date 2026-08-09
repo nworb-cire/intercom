@@ -24,6 +24,7 @@ ESL_PORT = int(os.environ.get("FREESWITCH_ESL_PORT", "8021"))
 ESL_PASSWORD = os.environ["INTERCOM_ESL_PASSWORD"]
 DEVICE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 operations_lock = threading.Lock()
+ADAPTER_TIMEOUT = float(os.environ.get("INTERCOM_ADAPTER_TIMEOUT", "20"))
 
 
 class Error(RuntimeError):
@@ -145,7 +146,7 @@ class ESL:
 def adapter_request(adapter_url: str, method: str) -> dict[str, Any]:
     request = urllib.request.Request(adapter_url + "/connect", method=method)
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        with urllib.request.urlopen(request, timeout=ADAPTER_TIMEOUT) as response:
             return json.load(response)
     except (urllib.error.URLError, TimeoutError) as exc:
         reason = exc.reason if hasattr(exc, "reason") else exc

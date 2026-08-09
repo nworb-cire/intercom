@@ -32,7 +32,7 @@ curl --fail --silent --show-error \
 for attempt in $(seq 1 30); do
   health=$(curl --fail --silent --show-error "$voice_adapter/health")
   if printf '%s' "$health" | jq -e \
-    '.connected and .music_assistant and .stream_clients > 0 and .stream_pcm_bytes > 32000 and .stream_peak > 0' \
+    '.connected and .music_assistant and .stream_clients > 0 and .stream_pcm_bytes > 32000 and .stream_peak > 100' \
     >/dev/null; then
     printf '%s\n' "$health" | jq -c \
       '{connected,music_assistant,stream_clients,stream_pcm_bytes,stream_peak}'
