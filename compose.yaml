@@ -3,7 +3,7 @@ x-adapter: &adapter
     context: ../intercom/adapter
   restart: unless-stopped
   networks:
-    - intercom
+    - media
     - web
   depends_on:
     freeswitch:
@@ -18,7 +18,8 @@ services:
     container_name: intercom-freeswitch
     restart: unless-stopped
     networks:
-      - intercom
+      media:
+        ipv4_address: 172.30.0.2
     environment:
       INTERCOM_ESL_PASSWORD: ${INTERCOM_ESL_PASSWORD:?INTERCOM_ESL_PASSWORD is required}
     healthcheck:
@@ -34,7 +35,7 @@ services:
     container_name: intercom-controller
     restart: unless-stopped
     networks:
-      - intercom
+      - media
       - web
     depends_on:
       freeswitch:
@@ -83,7 +84,10 @@ volumes:
   sink_captures:
 
 networks:
-  intercom:
+  media:
     internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
   web:
     external: true

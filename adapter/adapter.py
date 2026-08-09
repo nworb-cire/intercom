@@ -54,12 +54,12 @@ rtcp_mux no
 jitter_buffer_delay 2-10
 module_path /usr/lib/baresip/modules
 module stdio.so
-module account.so
-module menu.so
 module g711.so
 module pulse.so
 module ausine.so
 module gst.so
+module account.so
+module menu.so
 """
     account = (
         f'"{DEVICE_ID}" <sip:{DEVICE_ID}@127.0.0.1;transport=udp>'
