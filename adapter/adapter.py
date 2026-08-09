@@ -16,14 +16,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from music_assistant import MusicAssistantError, MusicAssistantSink, pcm_peak, wav_header
+
 
 DEVICE_ID = os.environ["DEVICE_ID"]
 SOURCE_KIND = os.environ.get("SOURCE_KIND", "silence")
 SOURCE_URI = os.environ.get("SOURCE_URI", "")
 CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
-SENDSPIN_RECEIVED = os.environ.get("SENDSPIN_RECEIVED", "false").lower() == "true"
-SENDSPIN_PORT = int(os.environ.get("SENDSPIN_PORT", "8927"))
-SENDSPIN_CLIENT_URL = os.environ.get("SENDSPIN_CLIENT_URL", "")
+MUSIC_ASSISTANT_RECEIVED = os.environ.get("MUSIC_ASSISTANT_RECEIVED", "false").lower() == "true"
+MUSIC_ASSISTANT_URL = os.environ.get("MUSIC_ASSISTANT_URL", "http://127.0.0.1:8095")
+MUSIC_ASSISTANT_PLAYER_ID = os.environ.get("MUSIC_ASSISTANT_PLAYER_ID", "")
+MUSIC_ASSISTANT_TOKEN_FILE = Path(
+    os.environ.get("MUSIC_ASSISTANT_TOKEN_FILE", "/run/secrets/music-assistant-token")
+)
+MUSIC_ASSISTANT_STREAM_URL = os.environ.get("MUSIC_ASSISTANT_STREAM_URL", "")
 UDP_REMOTE_HOST = os.environ.get("UDP_REMOTE_HOST", "")
 UDP_REMOTE_PORT = int(os.environ.get("UDP_REMOTE_PORT", "18555"))
 UDP_TOKEN = os.environ.get("UDP_TOKEN", "")
@@ -39,8 +45,27 @@ if SOURCE_KIND == "gstreamer" and not SOURCE_URI.startswith(("rtsp://", "http://
     raise SystemExit("gstreamer SOURCE_URI must be an RTSP or HTTP URL")
 if SOURCE_KIND == "udp-pcm" and (not UDP_REMOTE_HOST or len(UDP_TOKEN) < 24):
     raise SystemExit("udp-pcm requires UDP_REMOTE_HOST and a UDP_TOKEN of at least 24 characters")
+if MUSIC_ASSISTANT_RECEIVED and (not MUSIC_ASSISTANT_PLAYER_ID or not MUSIC_ASSISTANT_STREAM_URL):
+    raise SystemExit(
+        "MUSIC_ASSISTANT_RECEIVED requires MUSIC_ASSISTANT_PLAYER_ID and MUSIC_ASSISTANT_STREAM_URL"
+    )
 
 connected = False
+stream_lock = threading.Lock()
+stream_processes: set[subprocess.Popen[bytes]] = set()
+stream_clients = 0
+stream_pcm_bytes = 0
+stream_peak = 0
+music_assistant = (
+    MusicAssistantSink(
+        MUSIC_ASSISTANT_URL,
+        MUSIC_ASSISTANT_TOKEN_FILE,
+        MUSIC_ASSISTANT_PLAYER_ID,
+        MUSIC_ASSISTANT_STREAM_URL,
+    )
+    if MUSIC_ASSISTANT_RECEIVED
+    else None
+)
 
 
 def media_ip() -> str:
@@ -177,46 +202,14 @@ def start_udp_microphone() -> None:
     threading.Thread(target=receive, name="udp-microphone", daemon=True).start()
 
 
-def start_capture() -> subprocess.Popen[bytes] | None:
+def start_capture() -> list[subprocess.Popen[Any]]:
     if not CAPTURE_RECEIVED:
-        return None
-    parec = subprocess.Popen(
-        ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
-        stdout=subprocess.PIPE,
-    )
-
-
-def start_sendspin() -> list[subprocess.Popen[Any]]:
-    """Feed received PCM to a LAN-visible standalone Sendspin server via a FIFO."""
-    if not SENDSPIN_RECEIVED:
         return []
-    fifo = CONFIG / "received.wav"
-    fifo.unlink(missing_ok=True)
-    os.mkfifo(fifo)
-    server_command = [
-        "sendspin", "serve", str(fifo), "--port", str(SENDSPIN_PORT),
-        "--name", f"Intercom {DEVICE_ID}", "--log-level", "INFO",
-    ]
-    if SENDSPIN_CLIENT_URL:
-        if not SENDSPIN_CLIENT_URL.startswith(("ws://", "wss://")):
-            raise SystemExit("SENDSPIN_CLIENT_URL must be a WebSocket URL")
-        server_command.extend(("--client", SENDSPIN_CLIENT_URL))
-    server = subprocess.Popen(server_command)
     parec = subprocess.Popen(
         ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
         stdout=subprocess.PIPE,
     )
-    pcm = subprocess.Popen(
-        [
-            "ffmpeg", "-y", "-nostdin", "-loglevel", "warning", "-f", "s16le",
-            "-ar", "16000", "-ac", "1", "-i", "pipe:0", "-ar", "48000", "-ac", "2",
-            "-codec:a", "pcm_s16le", "-f", "wav", str(fifo),
-        ],
-        stdin=parec.stdout,
-    )
-    print(f"received PCM feeding standalone Sendspin on :{SENDSPIN_PORT}", flush=True)
-    return [server, parec, pcm]
-    return subprocess.Popen(
+    capture_process = subprocess.Popen(
         [
             "ffmpeg", "-nostdin", "-loglevel", "warning", "-f", "s16le", "-ar", "16000",
             "-ac", "1", "-i", "pipe:0", "-f", "segment", "-segment_time", "10",
@@ -224,14 +217,14 @@ def start_sendspin() -> list[subprocess.Popen[Any]]:
         ],
         stdin=parec.stdout,
     )
+    return [parec, capture_process]
 
 
 write_config()
 start_pulse()
 start_udp_microphone()
-capture = start_capture()
-sendspin_processes = start_sendspin()
-for process_name, process in zip(("sendspin", "parec", "pcm bridge"), sendspin_processes):
+capture_processes = start_capture()
+for process_name, process in zip(("capture source", "capture writer"), capture_processes):
     def watch_child(name: str = process_name, child: subprocess.Popen[Any] = process) -> None:
         return_code = child.wait()
         print(f"{name} exited unexpectedly with status {return_code}", flush=True)
@@ -278,17 +271,73 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        global stream_clients, stream_pcm_bytes, stream_peak
+        if self.path == "/stream.wav" and music_assistant is not None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(wav_header())
+            source = subprocess.Popen(
+                [
+                    "parec", "--device=intercom.monitor", "--format=s16le",
+                    "--rate=16000", "--channels=1",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            with stream_lock:
+                stream_processes.add(source)
+                stream_clients += 1
+            try:
+                assert source.stdout is not None
+                while payload := source.stdout.read(4096):
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                    peak = pcm_peak(payload)
+                    with stream_lock:
+                        stream_pcm_bytes += len(payload)
+                        stream_peak = max(stream_peak, peak)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                source.terminate()
+                try:
+                    source.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    source.kill()
+                    source.wait()
+                with stream_lock:
+                    stream_processes.discard(source)
+                    stream_clients -= 1
+            return
         if self.path != "/health":
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        with stream_lock:
+            stream_status = {
+                "stream_clients": stream_clients,
+                "stream_pcm_bytes": stream_pcm_bytes,
+                "stream_peak": stream_peak,
+            }
         self.reply(HTTPStatus.OK if baresip.poll() is None else HTTPStatus.SERVICE_UNAVAILABLE, {
             "ok": baresip.poll() is None,
             "device_id": DEVICE_ID,
             "source_kind": SOURCE_KIND,
             "connected": connected,
             "capture": CAPTURE_RECEIVED,
-            "sendspin": SENDSPIN_RECEIVED,
+            "music_assistant": MUSIC_ASSISTANT_RECEIVED,
+            **stream_status,
         })
+
+    def do_HEAD(self) -> None:
+        if self.path != "/stream.wav" or music_assistant is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def do_POST(self) -> None:
         global connected
@@ -298,7 +347,15 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             if not connected:
                 command(f"/dial {FREESWITCH_URI}")
-                connected = True
+                try:
+                    if music_assistant is not None:
+                        music_assistant.play()
+                    connected = True
+                except MusicAssistantError as exc:
+                    command("/hangup")
+                    print(f"Music Assistant play failed: {exc}", flush=True)
+                    self.reply(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+                    return
         self.reply(HTTPStatus.ACCEPTED, {"connected": connected})
 
     def do_DELETE(self) -> None:
@@ -307,10 +364,23 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         with lock:
+            stop_error = None
             if connected:
+                if music_assistant is not None:
+                    try:
+                        music_assistant.stop()
+                    except MusicAssistantError as exc:
+                        stop_error = exc
+                        print(f"Music Assistant stop failed: {exc}", flush=True)
                 command("/hangup")
                 connected = False
-        self.reply(HTTPStatus.OK, {"connected": connected})
+            with stream_lock:
+                for process in tuple(stream_processes):
+                    process.terminate()
+        if stop_error is not None:
+            self.reply(HTTPStatus.BAD_GATEWAY, {"error": str(stop_error), "connected": connected})
+        else:
+            self.reply(HTTPStatus.OK, {"connected": connected})
 
 
 # Give Baresip time to load modules before reporting a usable HTTP endpoint.
