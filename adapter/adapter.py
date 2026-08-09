@@ -45,7 +45,7 @@ audio_player pulse,intercom
 audio_source {source}
 audio_alert pulse,intercom
 auplay_srate 16000
-ausrc_srate 16000
+ausrc_srate 48000
 auplay_channels 1
 ausrc_channels 1
 audio_level no
