@@ -61,7 +61,7 @@ the `intercom_sink_captures` volume.
 
 ```sh
 curl -fsS -X POST -H 'Content-Type: application/json' \
-  -d '{"device_id":"room-a-camera","adapter_url":"http://room-a-camera:8080","can_transmit":true,"can_receive":false}' \
+  -d '{"device_id":"room-a-camera","adapter_url":"http://room-a-camera:8080","can_transmit":true,"can_receive":false,"gain":{"input_level":4,"agc_target":1000}}' \
   http://127.0.0.1:8099/connections
 curl -fsS -X POST -H 'Content-Type: application/json' \
   -d '{"device_id":"lab-speaker","adapter_url":"http://lab-speaker:8080","can_transmit":false,"can_receive":true}' \
@@ -101,6 +101,12 @@ leaves.
   with each connect or disconnect request; the controller does not retain a
   device registry. `adapter_url` may be `null` when the participant has already
   joined FreeSWITCH directly.
+- A connection descriptor may include optional `gain` settings. `input_level`
+  and `output_level` are FreeSWITCH member levels from `-4` through `4`;
+  `agc_target` is from `1` through `1800`. The controller applies only supplied
+  settings on every connect or reauthorization, so the application owns their
+  persistence. Omit a setting to leave FreeSWITCH's current/default value
+  unchanged.
 - The API starts from deny-by-default relationships when a participant joins;
   callers must explicitly enable desired directions.
 

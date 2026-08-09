@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -35,6 +35,15 @@ class ValidationError(Error):
 
 
 @dataclass(frozen=True)
+class GainSettings:
+    """Optional per-member audio settings, owned and persisted by the caller."""
+
+    input_level: int | None = None
+    output_level: int | None = None
+    agc_target: int | None = None
+
+
+@dataclass(frozen=True)
 class Endpoint:
     """Application-supplied adapter details for one connection operation."""
 
@@ -42,6 +51,27 @@ class Endpoint:
     adapter_url: str | None
     can_transmit: bool
     can_receive: bool
+    gain: GainSettings = field(default_factory=GainSettings)
+
+
+def gain_from_body(body: Any) -> GainSettings:
+    if body is None:
+        return GainSettings()
+    if not isinstance(body, dict):
+        raise ValidationError("gain must be an object")
+
+    def level(name: str) -> int | None:
+        value = body.get(name)
+        if value is None:
+            return None
+        if type(value) is not int or not -4 <= value <= 4:
+            raise ValidationError(f"gain.{name} must be an integer from -4 through 4")
+        return value
+
+    agc_target = body.get("agc_target")
+    if agc_target is not None and (type(agc_target) is not int or not 1 <= agc_target <= 1800):
+        raise ValidationError("gain.agc_target must be an integer from 1 through 1800")
+    return GainSettings(level("input_level"), level("output_level"), agc_target)
 
 
 def endpoint_from_body(body: Any) -> Endpoint:
@@ -70,7 +100,7 @@ def endpoint_from_body(body: Any) -> Endpoint:
         adapter_url = adapter_url.rstrip("/")
     if not isinstance(can_transmit, bool) or not isinstance(can_receive, bool):
         raise ValidationError("can_transmit and can_receive must be booleans")
-    return Endpoint(device_id, adapter_url, can_transmit, can_receive)
+    return Endpoint(device_id, adapter_url, can_transmit, can_receive, gain_from_body(body.get("gain")))
 
 
 class ESL:
@@ -141,6 +171,8 @@ def session() -> dict[str, Any]:
             "member_id": int(member["id"]),
             "uuid": member.get("uuid"),
             "flags": member.get("flags", {}),
+            "input_gain": member.get("input-volume"),
+            "output_gain": member.get("output-volume"),
         })
     return {"room": ROOM, "active": bool(conference), "members": normalized}
 
@@ -175,6 +207,15 @@ def enforce_capabilities(member_id: int, endpoint: Endpoint) -> None:
         ESL().api(f"conference {ROOM} relate {other_id} {member_id} nospeak")
 
 
+def apply_gain(member_id: int, gain: GainSettings) -> None:
+    if gain.input_level is not None:
+        ESL().api(f"conference {ROOM} volume_in {member_id} {gain.input_level}")
+    if gain.output_level is not None:
+        ESL().api(f"conference {ROOM} volume_out {member_id} {gain.output_level}")
+    if gain.agc_target is not None:
+        ESL().api(f"conference {ROOM} agc {member_id} {gain.agc_target}")
+
+
 def connect(endpoint: Endpoint) -> dict[str, Any]:
     """Connect or re-authorize an endpoint without retaining its definition."""
     with operations_lock:
@@ -190,6 +231,7 @@ def connect(endpoint: Endpoint) -> dict[str, Any]:
                 raise
         assert member is not None
         enforce_capabilities(member["member_id"], endpoint)
+        apply_gain(member["member_id"], endpoint.gain)
         return session()
 
 
@@ -219,7 +261,7 @@ def set_route(source: str, sink: str, enabled: bool) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "intercom-controller/0.2"
+    server_version = "intercom-controller/0.3"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.address_string()} {fmt % args}", flush=True)

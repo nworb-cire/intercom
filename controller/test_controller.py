@@ -36,6 +36,33 @@ class EndpointTests(unittest.TestCase):
         })
         self.assertEqual(endpoint, controller.Endpoint("lab-a", "http://lab-a:8080", True, False))
 
+    def test_accepts_optional_application_owned_gain_settings(self):
+        endpoint = controller.endpoint_from_body({
+            "device_id": "lab-a",
+            "adapter_url": "http://lab-a:8080",
+            "can_transmit": True,
+            "can_receive": False,
+            "gain": {"input_level": 4, "output_level": -2, "agc_target": 1000},
+        })
+        self.assertEqual(endpoint.gain, controller.GainSettings(4, -2, 1000))
+
+    def test_rejects_invalid_gain_settings(self):
+        body = {
+            "device_id": "lab-a",
+            "adapter_url": "http://lab-a:8080",
+            "can_transmit": True,
+            "can_receive": True,
+            "gain": {"input_level": 5},
+        }
+        with self.assertRaisesRegex(controller.ValidationError, "input_level"):
+            controller.endpoint_from_body(body)
+        body["gain"] = {"agc_target": 0}
+        with self.assertRaisesRegex(controller.ValidationError, "agc_target"):
+            controller.endpoint_from_body(body)
+        body["gain"] = {"output_level": True}
+        with self.assertRaisesRegex(controller.ValidationError, "output_level"):
+            controller.endpoint_from_body(body)
+
     def test_rejects_adapter_url_with_credentials_or_path(self):
         body = {
             "device_id": "lab-a",
@@ -101,6 +128,21 @@ class ConnectionTests(unittest.TestCase):
             "conference intercom undeaf 1",
             "conference intercom relate 1 2 nospeak",
             "conference intercom relate 2 1 nospeak",
+        ])
+
+    @patch.object(controller, "session", return_value={"members": [
+        {"device_id": "lab-a", "member_id": 1}, {"device_id": "lab-b", "member_id": 2}
+    ]})
+    @patch.object(controller, "ESL", FakeESL)
+    def test_applies_requested_gain_on_each_connection(self, _session):
+        endpoint = controller.Endpoint(
+            "lab-a", "http://lab-a:8080", True, True, controller.GainSettings(4, -1, 1000)
+        )
+        controller.connect(endpoint)
+        self.assertEqual(FakeESL.commands[-3:], [
+            "conference intercom volume_in 1 4",
+            "conference intercom volume_out 1 -1",
+            "conference intercom agc 1 1000",
         ])
 
     @patch.object(controller, "member_for_device", return_value=None)
