@@ -100,11 +100,32 @@ def start_pulse() -> None:
         ["pulseaudio", "--start", "--exit-idle-time=-1", "--log-target=stderr"],
         check=True,
     )
-    subprocess.run(
-        ["pactl", "load-module", "module-null-sink", "sink_name=intercom", "rate=16000", "channels=1"],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+
+    # pulseaudio --start returns before its native socket is ready. In
+    # particular, a container restart can otherwise race the first pactl call
+    # and leave the adapter in a restart loop. Reuse an already-created sink
+    # too, which makes initialization safe when PulseAudio survives briefly
+    # across a container restart.
+    deadline = time.monotonic() + 5
+    while True:
+        sinks = subprocess.run(
+            ["pactl", "list", "short", "sinks"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if any(line.split("\t", 2)[1:2] == ["intercom"] for line in sinks.stdout.splitlines()):
+            break
+        loaded = subprocess.run(
+            ["pactl", "load-module", "module-null-sink", "sink_name=intercom", "rate=16000", "channels=1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if loaded.returncode == 0:
+            break
+        if time.monotonic() >= deadline:
+            raise subprocess.CalledProcessError(loaded.returncode, loaded.args)
+        time.sleep(0.1)
     if SOURCE_KIND == "udp-pcm":
         fifo = CONFIG / "microphone.pcm"
         fifo.unlink(missing_ok=True)
