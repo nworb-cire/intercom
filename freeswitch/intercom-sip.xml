@@ -11,7 +11,7 @@
     <param name="context" value="public"/>
     <param name="dialplan" value="XML"/>
     <param name="auth-calls" value="false"/>
-    <param name="apply-inbound-acl" value="localnet.auto"/>
+    <param name="apply-inbound-acl" value="rfc1918.auto"/>
     <param name="inbound-codec-prefs" value="PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="PCMU,PCMA"/>
     <param name="rtp-timer-name" value="soft"/>
