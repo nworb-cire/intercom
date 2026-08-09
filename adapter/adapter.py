@@ -45,7 +45,8 @@ def write_config() -> None:
     CONFIG.mkdir(parents=True, exist_ok=True)
     bind_ip = media_ip()
     source = {
-        "silence": "ausine,0",
+        # Baresip 1.0 rejects 0 Hz; speaker-only endpoints are conference-muted.
+        "silence": "ausine,10",
         "sine": f"ausine,{int(os.environ.get('SINE_FREQUENCY', '440'))}",
         "gstreamer": f"gst,{SOURCE_URI}",
     }[SOURCE_KIND]
