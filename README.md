@@ -29,8 +29,8 @@ interfaces on the Voice PE or Echo.
 ## Run
 
 The Portainer stack is [`../stacks/intercom.yaml`](../stacks/intercom.yaml).
-It publishes only the controller on loopback (`127.0.0.1:8099`). SIP and RTP
-ports are published on the LAN for softphone testing and future phones.
+It publishes only the controller on loopback (`127.0.0.1:8099`). FreeSWITCH,
+SIP, and RTP stay on the internal Docker network for this unauthenticated PoC.
 
 ```sh
 export INTERCOM_ESL_PASSWORD="$(openssl rand -hex 24)"
@@ -80,11 +80,12 @@ Disconnects are authoritative and require no action at the physical device:
 curl -fsS -X DELETE http://127.0.0.1:8099/devices/room-a-camera/connect
 ```
 
-An ordinary SIP softphone can eventually dial extension `9000` on the Docker host
-host and join the same on-demand `intercom` conference. The fail-closed PoC
-profile initially mutes and deafens every new member, so the application layer
-must identify and enable an unmanaged phone before it carries audio. The
-conference disappears when its final member leaves.
+An ordinary SIP softphone can eventually use extension `9000` and join the same
+on-demand `intercom` conference once a secured SIP profile is intentionally
+published on the LAN. The fail-closed profile initially mutes and deafens every
+new member, so the application layer must identify and enable an unmanaged
+phone before it carries audio. The conference disappears when its final member
+leaves.
 
 ## Semantics
 

@@ -21,13 +21,12 @@ services:
       - intercom
     environment:
       INTERCOM_ESL_PASSWORD: ${INTERCOM_ESL_PASSWORD:?INTERCOM_ESL_PASSWORD is required}
-      SOUND_RATES: "8000:16000"
-    ports:
-      - 5060:5060/tcp
-      - 5060:5060/udp
-      - 5080:5080/tcp
-      - 5080:5080/udp
-      - 16384-16447:16384-16447/udp
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/bin/fs_cli -p \"$${INTERCOM_ESL_PASSWORD}\" -x status >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   controller:
     build:
