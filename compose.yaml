@@ -35,6 +35,7 @@ services:
     restart: unless-stopped
     networks:
       - intercom
+      - web
     depends_on:
       freeswitch:
         condition: service_healthy

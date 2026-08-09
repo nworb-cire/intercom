@@ -104,7 +104,7 @@ loopback and must not be exposed through Traefik.
 
 ## Telephone evolution
 
-The internal FreeSWITCH SIP profile remains available for registered phones
+The PoC's internal SIP profile can be cloned and secured for registered phones
 and a later trunk. An inbound trunk call can be placed into `intercom@wideband`
 and house devices can join the same room. Nothing in the controller assumes
 that a session contains only adapter-originated calls.
