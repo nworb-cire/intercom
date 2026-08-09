@@ -105,6 +105,7 @@ services:
       DEVICE_ID: voice-pe
       SOURCE_KIND: silence
       SENDSPIN_RECEIVED: "true"
+      SENDSPIN_CLIENT_URL: ws://192.0.2.20:8928/sendspin
       HTTP_PORT: "8088"
 
 volumes:

@@ -22,6 +22,7 @@ SOURCE_URI = os.environ.get("SOURCE_URI", "")
 CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
 SENDSPIN_RECEIVED = os.environ.get("SENDSPIN_RECEIVED", "false").lower() == "true"
 SENDSPIN_PORT = int(os.environ.get("SENDSPIN_PORT", "8927"))
+SENDSPIN_CLIENT_URL = os.environ.get("SENDSPIN_CLIENT_URL", "")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 FREESWITCH_URI = os.environ.get("FREESWITCH_URI", "sip:9000@freeswitch:5070")
 CONFIG = Path("/run/intercom/baresip")
@@ -113,12 +114,15 @@ def start_sendspin() -> list[subprocess.Popen[Any]]:
     fifo = CONFIG / "received.wav"
     fifo.unlink(missing_ok=True)
     os.mkfifo(fifo)
-    server = subprocess.Popen(
-        [
-            "sendspin", "serve", str(fifo), "--port", str(SENDSPIN_PORT),
-            "--name", f"Intercom {DEVICE_ID}", "--log-level", "INFO",
-        ]
-    )
+    server_command = [
+        "sendspin", "serve", str(fifo), "--port", str(SENDSPIN_PORT),
+        "--name", f"Intercom {DEVICE_ID}", "--log-level", "INFO",
+    ]
+    if SENDSPIN_CLIENT_URL:
+        if not SENDSPIN_CLIENT_URL.startswith(("ws://", "wss://")):
+            raise SystemExit("SENDSPIN_CLIENT_URL must be a WebSocket URL")
+        server_command.extend(("--client", SENDSPIN_CLIENT_URL))
+    server = subprocess.Popen(server_command)
     parec = subprocess.Popen(
         ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
         stdout=subprocess.PIPE,
