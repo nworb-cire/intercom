@@ -147,7 +147,7 @@ write_config()
 start_pulse()
 capture = start_capture()
 sendspin_processes = start_sendspin()
-for process_name, process in zip(("sendspin", "parec", "pcm bridge"), sendspin_processes, strict=True):
+for process_name, process in zip(("sendspin", "parec", "pcm bridge"), sendspin_processes):
     def watch_child(name: str = process_name, child: subprocess.Popen[Any] = process) -> None:
         return_code = child.wait()
         print(f"{name} exited unexpectedly with status {return_code}", flush=True)
