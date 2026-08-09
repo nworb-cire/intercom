@@ -53,6 +53,7 @@ rtcp_mux no
 jitter_buffer_delay 2-10
 module_path /usr/lib/baresip/modules
 module stdio.so
+module account.so
 module menu.so
 module g711.so
 module pulse.so
