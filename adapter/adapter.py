@@ -95,17 +95,6 @@ def start_pulse() -> None:
         ["pulseaudio", "--start", "--exit-idle-time=-1", "--log-target=stderr"],
         check=True,
     )
-    for _ in range(50):
-        if subprocess.run(
-            ["pactl", "info"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        ).returncode == 0:
-            break
-        time.sleep(0.1)
-    else:
-        raise RuntimeError("PulseAudio did not become ready")
     subprocess.run(
         ["pactl", "load-module", "module-null-sink", "sink_name=intercom", "rate=16000", "channels=1"],
         check=True,
