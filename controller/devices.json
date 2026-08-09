@@ -36,9 +36,9 @@
   },
   "voice-pe": {
     "name": "Home Assistant Voice PE",
-    "adapter_url": "http://voice-pe:8080",
+    "adapter_url": "http://172.30.0.1:8088",
     "can_transmit": false,
     "can_receive": true,
-    "physical_protocol": "Home Assistant media player via HTTP MP3"
+    "physical_protocol": "standalone Sendspin over lossless PCM"
   }
 }

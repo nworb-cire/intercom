@@ -20,8 +20,9 @@ DEVICE_ID = os.environ["DEVICE_ID"]
 SOURCE_KIND = os.environ.get("SOURCE_KIND", "silence")
 SOURCE_URI = os.environ.get("SOURCE_URI", "")
 CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
-STREAM_RECEIVED = os.environ.get("STREAM_RECEIVED", "false").lower() == "true"
-STREAM_PORT = int(os.environ.get("STREAM_PORT", "8090"))
+SENDSPIN_RECEIVED = os.environ.get("SENDSPIN_RECEIVED", "false").lower() == "true"
+SENDSPIN_PORT = int(os.environ.get("SENDSPIN_PORT", "8927"))
+HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 FREESWITCH_URI = os.environ.get("FREESWITCH_URI", "sip:9000@freeswitch:5070")
 CONFIG = Path("/run/intercom/baresip")
 
@@ -105,31 +106,33 @@ def start_capture() -> subprocess.Popen[bytes] | None:
     )
 
 
-def serve_received_audio() -> None:
-    """Expose received conference audio as a reconnectable MP3 HTTP stream."""
-    while True:
-        parec = subprocess.Popen(
-            ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
-            stdout=subprocess.PIPE,
-        )
-        ffmpeg = subprocess.Popen(
-            [
-                "ffmpeg", "-nostdin", "-loglevel", "warning", "-f", "s16le", "-ar", "16000",
-                "-ac", "1", "-i", "pipe:0", "-codec:a", "libmp3lame", "-b:a", "64k",
-                "-content_type", "audio/mpeg", "-f", "mp3", "-listen", "1",
-                f"http://0.0.0.0:{STREAM_PORT}/stream.mp3",
-            ],
-            stdin=parec.stdout,
-        )
-        print(f"received-audio stream listening on :{STREAM_PORT}/stream.mp3", flush=True)
-        return_code = ffmpeg.wait()
-        parec.terminate()
-        try:
-            parec.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            parec.kill()
-        print(f"received-audio client disconnected (ffmpeg exit {return_code}); restarting", flush=True)
-        time.sleep(1)
+def start_sendspin() -> list[subprocess.Popen[Any]]:
+    """Feed received PCM to a LAN-visible standalone Sendspin server via a FIFO."""
+    if not SENDSPIN_RECEIVED:
+        return []
+    fifo = CONFIG / "received.wav"
+    fifo.unlink(missing_ok=True)
+    os.mkfifo(fifo)
+    server = subprocess.Popen(
+        [
+            "sendspin", "serve", str(fifo), "--port", str(SENDSPIN_PORT),
+            "--name", f"Intercom {DEVICE_ID}", "--log-level", "INFO",
+        ]
+    )
+    parec = subprocess.Popen(
+        ["parec", "--device=intercom.monitor", "--format=s16le", "--rate=16000", "--channels=1"],
+        stdout=subprocess.PIPE,
+    )
+    pcm = subprocess.Popen(
+        [
+            "ffmpeg", "-y", "-nostdin", "-loglevel", "warning", "-f", "s16le",
+            "-ar", "16000", "-ac", "1", "-i", "pipe:0", "-ar", "48000", "-ac", "2",
+            "-codec:a", "pcm_s16le", "-f", "wav", str(fifo),
+        ],
+        stdin=parec.stdout,
+    )
+    print(f"received PCM feeding standalone Sendspin on :{SENDSPIN_PORT}", flush=True)
+    return [server, parec, pcm]
     return subprocess.Popen(
         [
             "ffmpeg", "-nostdin", "-loglevel", "warning", "-f", "s16le", "-ar", "16000",
@@ -143,8 +146,14 @@ def serve_received_audio() -> None:
 write_config()
 start_pulse()
 capture = start_capture()
-if STREAM_RECEIVED:
-    threading.Thread(target=serve_received_audio, daemon=True).start()
+sendspin_processes = start_sendspin()
+for process_name, process in zip(("sendspin", "parec", "pcm bridge"), sendspin_processes, strict=True):
+    def watch_child(name: str = process_name, child: subprocess.Popen[Any] = process) -> None:
+        return_code = child.wait()
+        print(f"{name} exited unexpectedly with status {return_code}", flush=True)
+        os._exit(return_code or 1)
+
+    threading.Thread(target=watch_child, daemon=True).start()
 baresip = subprocess.Popen(
     ["baresip", "-f", str(CONFIG)],
     stdin=subprocess.PIPE,
@@ -195,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
             "source_kind": SOURCE_KIND,
             "connected": connected,
             "capture": CAPTURE_RECEIVED,
-            "stream": STREAM_RECEIVED,
+            "sendspin": SENDSPIN_RECEIVED,
         })
 
     def do_POST(self) -> None:
@@ -223,4 +232,4 @@ class Handler(BaseHTTPRequestHandler):
 
 # Give Baresip time to load modules before reporting a usable HTTP endpoint.
 time.sleep(1)
-ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler).serve_forever()

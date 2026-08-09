@@ -80,10 +80,11 @@ Disconnects are authoritative and require no action at the physical device:
 curl -fsS -X DELETE http://127.0.0.1:8099/devices/room-a-camera/connect
 ```
 
-The `voice-pe` adapter exposes received conference audio as an MP3 stream on
-`http://<Docker-host>:8100/stream.mp3`. Home Assistant can send that URL to the
-Voice PE media player while the controller independently enforces the one-way
-conference route (for example, `room-b-camera` to `voice-pe`).
+The `voice-pe` adapter runs on the host network so its standalone Sendspin
+server can advertise directly to the Voice PE. Received conference audio stays
+lossless: Pulse PCM is resampled into a local WAV FIFO and Sendspin negotiates
+PCM or FLAC with the physical player. Music Assistant and Home Assistant media
+playback are not in the intercom audio path.
 
 An ordinary SIP softphone can eventually use extension `9000` and join the same
 on-demand `intercom` conference once a secured SIP profile is intentionally

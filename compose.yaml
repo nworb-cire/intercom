@@ -93,14 +93,19 @@ services:
       SOURCE_URI: rtsp://frigate:8554/room_b_sub
 
   voice-pe:
-    <<: *adapter
+    build:
+      context: ../intercom/adapter
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      freeswitch:
+        condition: service_healthy
     environment:
-      <<: *adapter-environment
+      FREESWITCH_URI: sip:9000@172.30.0.2:5070
       DEVICE_ID: voice-pe
       SOURCE_KIND: silence
-      STREAM_RECEIVED: "true"
-    ports:
-      - 8100:8090
+      SENDSPIN_RECEIVED: "true"
+      HTTP_PORT: "8088"
 
 volumes:
   sink_captures:
