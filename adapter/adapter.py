@@ -16,21 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from music_assistant import MusicAssistantError, MusicAssistantSink, pcm_peak, wav_header
-from streaming import STREAM_CONTENT_TYPES, flac_encoder_command
+from streaming import STREAM_CONTENT_TYPES, flac_encoder_command, pcm_peak
 
 
 DEVICE_ID = os.environ["DEVICE_ID"]
 SOURCE_KIND = os.environ.get("SOURCE_KIND", "silence")
 SOURCE_URI = os.environ.get("SOURCE_URI", "")
 CAPTURE_RECEIVED = os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true"
-MUSIC_ASSISTANT_RECEIVED = os.environ.get("MUSIC_ASSISTANT_RECEIVED", "false").lower() == "true"
-MUSIC_ASSISTANT_URL = os.environ.get("MUSIC_ASSISTANT_URL", "http://127.0.0.1:8095")
-MUSIC_ASSISTANT_PLAYER_ID = os.environ.get("MUSIC_ASSISTANT_PLAYER_ID", "")
-MUSIC_ASSISTANT_TOKEN_FILE = Path(
-    os.environ.get("MUSIC_ASSISTANT_TOKEN_FILE", "/run/secrets/music-assistant-token")
-)
-MUSIC_ASSISTANT_STREAM_URL = os.environ.get("MUSIC_ASSISTANT_STREAM_URL", "")
 UDP_REMOTE_HOST = os.environ.get("UDP_REMOTE_HOST", "")
 UDP_REMOTE_PORT = int(os.environ.get("UDP_REMOTE_PORT", "18555"))
 UDP_TOKEN = os.environ.get("UDP_TOKEN", "")
@@ -46,30 +38,12 @@ if SOURCE_KIND == "gstreamer" and not SOURCE_URI.startswith(("rtsp://", "http://
     raise SystemExit("gstreamer SOURCE_URI must be an RTSP or HTTP URL")
 if SOURCE_KIND == "udp-pcm" and (not UDP_REMOTE_HOST or len(UDP_TOKEN) < 24):
     raise SystemExit("udp-pcm requires UDP_REMOTE_HOST and a UDP_TOKEN of at least 24 characters")
-if MUSIC_ASSISTANT_RECEIVED and (not MUSIC_ASSISTANT_PLAYER_ID or not MUSIC_ASSISTANT_STREAM_URL):
-    raise SystemExit(
-        "MUSIC_ASSISTANT_RECEIVED requires MUSIC_ASSISTANT_PLAYER_ID and MUSIC_ASSISTANT_STREAM_URL"
-    )
-
 connected = False
 stream_lock = threading.Lock()
 stream_processes: set[subprocess.Popen[bytes]] = set()
 stream_clients = 0
 stream_pcm_bytes = 0
 stream_peak = 0
-music_assistant_state = "disabled" if not MUSIC_ASSISTANT_RECEIVED else "unknown"
-music_assistant = (
-    MusicAssistantSink(
-        MUSIC_ASSISTANT_URL,
-        MUSIC_ASSISTANT_TOKEN_FILE,
-        MUSIC_ASSISTANT_PLAYER_ID,
-        MUSIC_ASSISTANT_STREAM_URL,
-    )
-    if MUSIC_ASSISTANT_RECEIVED
-    else None
-)
-
-
 def media_ip() -> str:
     match = re.search(r"@([^:;>]+)", FREESWITCH_URI)
     if not match:
@@ -260,33 +234,6 @@ def command(value: str) -> None:
     baresip.stdin.flush()
 
 
-def maintain_music_assistant_playback() -> None:
-    """Repair device playback drift while this adapter owns an active session."""
-    global music_assistant_state
-    assert music_assistant is not None
-    while True:
-        delay = 1
-        with lock:
-            if not connected:
-                music_assistant_state = "idle"
-            else:
-                try:
-                    music_assistant_state = music_assistant.player_state()
-                    if music_assistant_state != "playing":
-                        print(
-                            f"Music Assistant player drifted to {music_assistant_state}; "
-                            "restarting intercom playback",
-                            flush=True,
-                        )
-                        music_assistant.play()
-                        music_assistant_state = "playing"
-                except MusicAssistantError as exc:
-                    music_assistant_state = "unavailable"
-                    delay = 5
-                    print(f"Music Assistant playback check failed: {exc}", flush=True)
-        time.sleep(delay)
-
-
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.address_string()} {fmt % args}", flush=True)
@@ -306,8 +253,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", STREAM_CONTENT_TYPES[self.path])
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            if self.path == "/stream.wav":
-                self.wfile.write(wav_header())
             source = subprocess.Popen(
                 [
                     "parec", "--device=intercom.monitor", "--format=s16le",
@@ -403,8 +348,6 @@ class Handler(BaseHTTPRequestHandler):
             "source_kind": SOURCE_KIND,
             "connected": connected,
             "capture": CAPTURE_RECEIVED,
-            "music_assistant": MUSIC_ASSISTANT_RECEIVED,
-            "music_assistant_state": music_assistant_state,
             **stream_status,
         })
 
@@ -418,60 +361,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:
-        global connected, music_assistant_state
+        global connected
         if self.path != "/connect":
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         with lock:
-            newly_dialed = False
             if not connected:
                 command(f"/dial {FREESWITCH_URI}")
-                newly_dialed = True
-            try:
-                if music_assistant is not None:
-                    music_assistant.play()
-                    music_assistant_state = "playing"
-                connected = True
-            except MusicAssistantError as exc:
-                if newly_dialed:
-                    command("/hangup")
-                print(f"Music Assistant play failed: {exc}", flush=True)
-                self.reply(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
-                return
+            connected = True
         self.reply(HTTPStatus.ACCEPTED, {"connected": connected})
 
     def do_DELETE(self) -> None:
-        global connected, music_assistant_state
+        global connected
         if self.path != "/connect":
             self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         with lock:
-            stop_error = None
             if connected:
-                if music_assistant is not None:
-                    try:
-                        music_assistant.stop()
-                    except MusicAssistantError as exc:
-                        stop_error = exc
-                        print(f"Music Assistant stop failed: {exc}", flush=True)
                 command("/hangup")
                 connected = False
-                music_assistant_state = "idle"
             with stream_lock:
                 for process in tuple(stream_processes):
                     process.terminate()
-        if stop_error is not None:
-            self.reply(HTTPStatus.BAD_GATEWAY, {"error": str(stop_error), "connected": connected})
-        else:
-            self.reply(HTTPStatus.OK, {"connected": connected})
+        self.reply(HTTPStatus.OK, {"connected": connected})
 
 
 # Give Baresip time to load modules before reporting a usable HTTP endpoint.
 time.sleep(1)
-if music_assistant is not None:
-    threading.Thread(
-        target=maintain_music_assistant_playback,
-        name="music-assistant-watchdog",
-        daemon=True,
-    ).start()
 ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler).serve_forever()

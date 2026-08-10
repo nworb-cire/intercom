@@ -13,7 +13,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY adapter.py music_assistant.py streaming.py ./
+COPY adapter.py streaming.py ./
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin intercom \
  && mkdir -p /captures /run/intercom \
  && chown -R intercom:intercom /captures /run/intercom /app

@@ -4,9 +4,18 @@ from __future__ import annotations
 
 
 STREAM_CONTENT_TYPES = {
-    "/stream.wav": "audio/wav",
     "/stream.flac": "audio/flac",
 }
+
+
+def pcm_peak(payload: bytes) -> int:
+    """Return the absolute peak of little-endian signed 16-bit PCM."""
+    usable = len(payload) // 2 * 2
+    return max(
+        (abs(int.from_bytes(payload[index:index + 2], "little", signed=True))
+         for index in range(0, usable, 2)),
+        default=0,
+    )
 
 
 def flac_encoder_command() -> list[str]:

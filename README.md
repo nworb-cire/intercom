@@ -80,33 +80,11 @@ Disconnect the synthetic test clients:
 ./scripts/disconnect-lab-clients.sh
 ```
 
-The `voice-pe` adapter runs on the host network. It exposes received conference
-PCM as a live WAV response and uses Music Assistant's authenticated JSON-RPC API
-to start and stop that URL on the Voice PE. Music Assistant owns the device's
-Sendspin connection; the adapter does not implement Sendspin itself. The token
-is scoped to the Voice PE player and stored in the
-`intercom_music_assistant_auth` Docker volume, never in Git or Portainer stack
-environment values.
-
-The same adapter also exposes `/stream.flac`, a live 48 kHz stereo FLAC stream
-for applications that drive the Voice PE's native ESPHome media player
-directly. The endpoint is independent of Music Assistant and forwards each
-available encoder chunk immediately; it does not wait for compressed silence
-to fill a fixed HTTP write block. Device selection and play/stop remain
-application responsibilities.
-
-Provision or rotate that credential from a trusted checkout. The script emits
-only validation status, not the token:
-
-```sh
-docker volume create intercom_music_assistant_auth
-docker run --rm -i \
-  -e MUSIC_ASSISTANT_PLAYER_ID=voice-pe-player-id \
-  -v homeassistant_music_assistant_data:/data \
-  -v intercom_music_assistant_auth:/run/intercom-auth \
-  ghcr.io/music-assistant/server:latest \
-  python3 - <music-assistant/provision_token.py
-```
+The `voice-pe` adapter runs on the host network and exposes `/stream.flac`, a
+live 48 kHz stereo FLAC stream for applications that drive the Voice PE's
+native ESPHome media player directly. It forwards each available encoder chunk
+immediately; it does not wait for compressed silence to fill a fixed HTTP write
+block. Device selection and play/stop remain application responsibilities.
 
 The current local application script connects both room cameras with their
 owned gain settings and enables each route:
@@ -116,17 +94,9 @@ owned gain settings and enables each route:
 ./scripts/disconnect-rooms-from-voice-pe.sh
 ```
 
-The end-to-end smoke test temporarily routes the synthetic 440 Hz source to the
-Voice PE, then asserts that the MA stream client consumed non-silent conference
-PCM. It always disconnects its test participants:
-
-```sh
-./scripts/test-music-assistant-e2e.sh
-```
-
-The native FLAC endpoint has an independent end-to-end test. It routes the
-synthetic source to the capture adapter, decodes `/stream.flac`, and rejects
-silent or truncated PCM:
+The native FLAC endpoint has an end-to-end test. It routes the synthetic source
+to the capture adapter, decodes `/stream.flac`, and rejects silent or truncated
+PCM:
 
 ```sh
 ./scripts/test-flac-stream-e2e.sh

@@ -3,7 +3,7 @@ import struct
 import subprocess
 import unittest
 
-from streaming import STREAM_CONTENT_TYPES, flac_encoder_command
+from streaming import STREAM_CONTENT_TYPES, flac_encoder_command, pcm_peak
 
 
 class StreamingTest(unittest.TestCase):
@@ -15,6 +15,9 @@ class StreamingTest(unittest.TestCase):
         self.assertIn("-flush_packets", command)
         self.assertEqual(command[command.index("-compression_level") + 1], "0")
         self.assertEqual(command[-4:], ["1", "-f", "flac", "pipe:1"])
+
+    def test_pcm_peak_handles_signed_samples_and_partial_tail(self):
+        self.assertEqual(pcm_peak(b"\x00\x00\x00\x80\xff"), 32768)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
     def test_flac_encoder_accepts_streaming_pcm(self):
