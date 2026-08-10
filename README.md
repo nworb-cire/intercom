@@ -84,6 +84,13 @@ is scoped to the Voice PE player and stored in the
 `intercom_music_assistant_auth` Docker volume, never in Git or Portainer stack
 environment values.
 
+The same adapter also exposes `/stream.flac`, a live 48 kHz stereo FLAC stream
+for applications that drive the Voice PE's native ESPHome media player
+directly. The endpoint is independent of Music Assistant and forwards each
+available encoder chunk immediately; it does not wait for compressed silence
+to fill a fixed HTTP write block. Device selection and play/stop remain
+application responsibilities.
+
 Provision or rotate that credential from a trusted checkout. The script emits
 only validation status, not the token:
 
@@ -113,10 +120,18 @@ PCM. It always disconnects its test participants:
 ./intercom/scripts/test-music-assistant-e2e.sh
 ```
 
-An opt-in microphone bridge is prepared under
-[`voice-pe-esphome`](voice-pe-esphome/README.md), but the live participant
-remains receive-only until that firmware and its dedicated token are installed
-and verified on the Docker host.
+The native FLAC endpoint has an independent end-to-end test. It routes the
+synthetic source to the capture adapter, decodes `/stream.flac`, and rejects
+silent or truncated PCM:
+
+```sh
+./intercom/scripts/test-flac-stream-e2e.sh
+```
+
+The reproducible custom Voice PE firmware and authenticated microphone bridge
+are under [`voice-pe-esphome`](voice-pe-esphome/README.md). The application must
+still explicitly connect it with `can_transmit: true` before microphone audio
+can enter a session.
 
 An ordinary SIP softphone can eventually use extension `9000` and join the same
 on-demand `intercom` conference once a secured SIP profile is intentionally

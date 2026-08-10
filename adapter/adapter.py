@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from music_assistant import MusicAssistantError, MusicAssistantSink, pcm_peak, wav_header
+from streaming import STREAM_CONTENT_TYPES, flac_encoder_command
 
 
 DEVICE_ID = os.environ["DEVICE_ID"]
@@ -300,12 +301,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         global stream_clients, stream_pcm_bytes, stream_peak
-        if self.path == "/stream.wav" and music_assistant is not None:
+        if self.path in STREAM_CONTENT_TYPES:
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Type", STREAM_CONTENT_TYPES[self.path])
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(wav_header())
+            if self.path == "/stream.wav":
+                self.wfile.write(wav_header())
             source = subprocess.Popen(
                 [
                     "parec", "--device=intercom.monitor", "--format=s16le",
@@ -314,29 +316,76 @@ class Handler(BaseHTTPRequestHandler):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
+            encoder: subprocess.Popen[bytes] | None = None
+            pump: threading.Thread | None = None
+            if self.path == "/stream.flac":
+                encoder = subprocess.Popen(
+                    flac_encoder_command(),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+
+                def pump_pcm() -> None:
+                    global stream_pcm_bytes, stream_peak
+                    assert source.stdout is not None
+                    assert encoder is not None and encoder.stdin is not None
+                    try:
+                        while payload := source.stdout.read1(4096):
+                            peak = pcm_peak(payload)
+                            with stream_lock:
+                                stream_pcm_bytes += len(payload)
+                                stream_peak = max(stream_peak, peak)
+                            encoder.stdin.write(payload)
+                            encoder.stdin.flush()
+                    except (BrokenPipeError, OSError):
+                        pass
+                    finally:
+                        try:
+                            encoder.stdin.close()
+                        except OSError:
+                            pass
+
+                pump = threading.Thread(target=pump_pcm, name="flac-pcm-pump", daemon=True)
+                pump.start()
             with stream_lock:
                 stream_processes.add(source)
+                if encoder is not None:
+                    stream_processes.add(encoder)
                 stream_clients += 1
             try:
-                assert source.stdout is not None
-                while payload := source.stdout.read(4096):
+                output = source.stdout if encoder is None else encoder.stdout
+                assert output is not None
+                while payload := output.read1(4096):
                     self.wfile.write(payload)
                     self.wfile.flush()
-                    peak = pcm_peak(payload)
-                    with stream_lock:
-                        stream_pcm_bytes += len(payload)
-                        stream_peak = max(stream_peak, peak)
+                    if encoder is None:
+                        peak = pcm_peak(payload)
+                        with stream_lock:
+                            stream_pcm_bytes += len(payload)
+                            stream_peak = max(stream_peak, peak)
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
-                source.terminate()
-                try:
-                    source.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    source.kill()
-                    source.wait()
+                for process in (encoder, source):
+                    if process is None:
+                        continue
+                    if process.poll() is None:
+                        try:
+                            process.terminate()
+                        except ProcessLookupError:
+                            pass
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                if pump is not None:
+                    pump.join(timeout=2)
                 with stream_lock:
                     stream_processes.discard(source)
+                    if encoder is not None:
+                        stream_processes.discard(encoder)
                     stream_clients -= 1
             return
         if self.path != "/health":
@@ -360,11 +409,11 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def do_HEAD(self) -> None:
-        if self.path != "/stream.wav" or music_assistant is None:
+        if self.path not in STREAM_CONTENT_TYPES:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Type", STREAM_CONTENT_TYPES[self.path])
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 

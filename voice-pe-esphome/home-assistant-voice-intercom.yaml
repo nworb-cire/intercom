@@ -1,0 +1,33 @@
+# Custom Voice PE image for the intercom experiment.
+#
+# This is intentionally a thin package on top of the exact official Voice PE
+# firmware source.  Keep device credentials in the untracked secrets.yaml.
+packages:
+  voice_pe: github://esphome/home-assistant-voice-pe/home-assistant-voice.factory.yaml@7c6eb245b1d5253ee8672fbbdb604767e59a8ee9
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [udp_microphone]
+
+udp_microphone:
+  microphone:
+    microphone: i2s_mics
+    channels: 0
+    gain_factor: 4
+  port: 18555
+  token: !secret intercom_microphone_token
+
+# The stock image uses 500000 bytes here.  A smaller bounded buffer is needed
+# for interactive intercom audio; it remains above audio_http's 5000-byte
+# minimum while retaining enough data for decoder/network jitter.
+media_source:
+  - id: !extend http_media_source
+    buffer_size: 64000
+
+# Reuse the existing native-API identity so Home Assistant does not create a
+# second device.  The key itself stays in secrets.yaml and is never committed.
+api:
+  encryption:
+    key: !secret api_encryption_key
