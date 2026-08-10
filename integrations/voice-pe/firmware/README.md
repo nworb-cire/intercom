@@ -31,16 +31,16 @@ an authenticated subscriber renews a five-second lease.
 
 4. Validate, compile, and upload `home-assistant-voice-intercom.yaml`. Preserve
    a hash-verified official factory image and a stock OTA image before upload.
-5. Put the exact same canonical microphone token in the
-   Portainer intercom stack as `VOICE_PE_INTERCOM_TOKEN`; do not commit it.
+5. Put the exact same canonical microphone token in the deployment environment
+   as `UDP_TOKEN`; do not commit it.
 6. Redeploy only after capturing the existing Portainer stack configuration and
    confirming its Git update operation preserves all environment values.
 
-After the firmware is verified, change the Docker host's `voice-pe` service to
-`SOURCE_KIND: udp-pcm` and supply `UDP_REMOTE_HOST=192.0.2.20`,
-`UDP_REMOTE_PORT=18555`, and `UDP_TOKEN` from the Portainer environment. Then
-have the application include `"can_transmit": true` in its Voice PE connection
-request to the stateless intercom controller.
+After the firmware is verified, set the Docker host's `voice-pe` service to
+`VOICE_PE_MICROPHONE=true` and supply `UDP_REMOTE_HOST=192.0.2.20`,
+`UDP_REMOTE_PORT=18555`, and `UDP_TOKEN` from deployment secrets. Then have the
+application include `"can_transmit": true` in its Voice PE connection request
+to the stateless intercom controller.
 
 The component binds UDP port `18555` on the Voice PE. A valid `START <token>`
 datagram leases the stream to that sender's address and source port. Renewals

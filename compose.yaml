@@ -1,6 +1,8 @@
 x-adapter: &adapter
   build:
-    context: ./adapter
+    context: .
+    dockerfile: core/adapter_runtime/Dockerfile
+  command: ["python3", "/app/integrations/synthetic/adapter.py"]
   restart: unless-stopped
   networks:
     - media
@@ -14,7 +16,8 @@ x-adapter: &adapter
 services:
   freeswitch:
     build:
-      context: ./freeswitch
+      context: .
+      dockerfile: core/freeswitch/Dockerfile
     container_name: intercom-freeswitch
     restart: unless-stopped
     cap_add:
@@ -35,7 +38,8 @@ services:
 
   controller:
     build:
-      context: ./controller
+      context: .
+      dockerfile: core/controller/Dockerfile
     container_name: intercom-controller
     restart: unless-stopped
     networks:
@@ -81,20 +85,22 @@ services:
     environment:
       <<: *adapter-environment
       DEVICE_ID: room-a-camera
-      SOURCE_KIND: gstreamer
       SOURCE_URI: ${ROOM_A_SOURCE_URI:-rtsp://frigate:8554/room_a_sub}
+    command: ["python3", "/app/integrations/rtsp-camera/adapter.py"]
 
   room-b-camera:
     <<: *adapter
     environment:
       <<: *adapter-environment
       DEVICE_ID: room-b-camera
-      SOURCE_KIND: gstreamer
       SOURCE_URI: ${ROOM_B_SOURCE_URI:-rtsp://frigate:8554/room_b_sub}
+    command: ["python3", "/app/integrations/rtsp-camera/adapter.py"]
 
   voice-pe:
     build:
-      context: ./adapter
+      context: .
+      dockerfile: core/adapter_runtime/Dockerfile
+    command: ["python3", "/app/integrations/voice-pe/adapter.py"]
     restart: unless-stopped
     network_mode: host
     depends_on:
@@ -103,7 +109,10 @@ services:
     environment:
       FREESWITCH_URI: sip:9000@172.30.0.2:5070
       DEVICE_ID: voice-pe
-      SOURCE_KIND: silence
+      VOICE_PE_MICROPHONE: ${VOICE_PE_MICROPHONE:-false}
+      UDP_REMOTE_HOST: ${UDP_REMOTE_HOST:-}
+      UDP_REMOTE_PORT: ${UDP_REMOTE_PORT:-18555}
+      UDP_TOKEN: ${UDP_TOKEN:-}
       HTTP_PORT: "8088"
 
 volumes:

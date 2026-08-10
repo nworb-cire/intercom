@@ -3,7 +3,7 @@ import struct
 import subprocess
 import unittest
 
-from streaming import STREAM_CONTENT_TYPES, flac_encoder_command, pcm_peak
+from core.adapter_runtime.streaming import STREAM_CONTENT_TYPES, flac_encoder_command, pcm_peak
 
 
 class StreamingTest(unittest.TestCase):

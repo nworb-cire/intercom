@@ -13,11 +13,13 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY adapter.py streaming.py ./
+COPY core /app/core
+COPY integrations /app/integrations
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin intercom \
  && mkdir -p /captures /run/intercom \
  && chown -R intercom:intercom /captures /run/intercom /app
 USER intercom:intercom
+ENV PYTHONPATH=/app
 ENV XDG_RUNTIME_DIR=/run/intercom
 EXPOSE 8080
-CMD ["python3", "/app/adapter.py"]
+CMD ["python3", "/app/integrations/synthetic/adapter.py"]

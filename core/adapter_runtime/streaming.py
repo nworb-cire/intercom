@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 
 STREAM_CONTENT_TYPES = {
     "/stream.flac": "audio/flac",
 }
+
+
+@dataclass(frozen=True)
+class FlacStreamSink:
+    """Low-latency FLAC sink exposed by adapters that support speaker playback."""
+
+    path: str = "/stream.flac"
+    content_type: str = "audio/flac"
+
+    def encoder_command(self) -> list[str]:
+        return flac_encoder_command()
 
 
 def pcm_peak(payload: bytes) -> int:

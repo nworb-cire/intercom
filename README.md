@@ -7,10 +7,23 @@ and capabilities for each connection operation, while FreeSWITCH is the source
 of truth for live conference membership.
 
 Physical devices are **not** assumed to support SIP. Each adapter has a
-device-native side and a nominally duplex media side. The included adapter
-uses GStreamer for RTSP camera audio and Baresip for its internal RTP/SIP leg;
+device-native side and a nominally duplex media side. The RTSP-camera
+integration uses GStreamer for camera audio and Baresip for its internal RTP/SIP leg;
 SIP is only an adapter implementation detail here. Future SIP phones can use
 FreeSWITCH directly.
+
+## Repository layout
+
+- [`core`](core) contains the FreeSWITCH controller, media configuration, and
+  the generic Python adapter runtime plus its `AudioSource` interface.
+- [`integrations`](integrations) contains device-specific adapter
+  implementations. The Voice PE firmware is under
+  [`integrations/voice-pe/firmware`](integrations/voice-pe/firmware).
+- [`homeassistant`](homeassistant) is reserved for the future application-layer
+  controller. It will own device descriptors, gain persistence, and route
+  selection; the core retains no device registry.
+- [`examples`](examples) contains application-like shell clients, while
+  [`tests/e2e`](tests/e2e) contains deployment smoke tests.
 
 ## Example deployment targets
 
@@ -55,7 +68,7 @@ deliberately application data rather than a controller registry; neither script
 contains a secret.
 
 ```sh
-./scripts/connect-lab-clients.sh
+./examples/connect-lab-clients.sh
 curl -fsS http://127.0.0.1:8099/session | jq
 ```
 
@@ -77,7 +90,7 @@ curl -fsS -X PUT -H 'Content-Type: application/json' \
 Disconnect the synthetic test clients:
 
 ```sh
-./scripts/disconnect-lab-clients.sh
+./examples/disconnect-lab-clients.sh
 ```
 
 The `voice-pe` adapter runs on the host network and exposes `/stream.flac`, a
@@ -90,8 +103,8 @@ The current local application script connects both room cameras with their
 owned gain settings and enables each route:
 
 ```sh
-./scripts/connect-rooms-to-voice-pe.sh
-./scripts/disconnect-rooms-from-voice-pe.sh
+./examples/connect-rooms-to-voice-pe.sh
+./examples/disconnect-rooms-from-voice-pe.sh
 ```
 
 The native FLAC endpoint has an end-to-end test. It routes the synthetic source
@@ -99,13 +112,13 @@ to the capture adapter, decodes `/stream.flac`, and rejects silent or truncated
 PCM:
 
 ```sh
-./scripts/test-flac-stream-e2e.sh
+./tests/e2e/test-flac-stream.sh
 ```
 
 The reproducible custom Voice PE firmware and authenticated microphone bridge
-are under [`voice-pe-esphome`](voice-pe-esphome/README.md). The application must
-still explicitly connect it with `can_transmit: true` before microphone audio
-can enter a session.
+are under [`integrations/voice-pe/firmware`](integrations/voice-pe/firmware/README.md).
+The application must still explicitly connect it with `can_transmit: true`
+before microphone audio can enter a session.
 
 An ordinary SIP softphone can eventually use extension `9000` and join the same
 on-demand `intercom` conference once a secured SIP profile is intentionally
