@@ -1,6 +1,6 @@
 x-adapter: &adapter
   build:
-    context: ../intercom/adapter
+    context: ./adapter
   restart: unless-stopped
   networks:
     - media
@@ -14,7 +14,7 @@ x-adapter: &adapter
 services:
   freeswitch:
     build:
-      context: ../intercom/freeswitch
+      context: ./freeswitch
     container_name: intercom-freeswitch
     restart: unless-stopped
     cap_add:
@@ -35,7 +35,7 @@ services:
 
   controller:
     build:
-      context: ../intercom/controller
+      context: ./controller
     container_name: intercom-controller
     restart: unless-stopped
     networks:
@@ -82,7 +82,7 @@ services:
       <<: *adapter-environment
       DEVICE_ID: room-a-camera
       SOURCE_KIND: gstreamer
-      SOURCE_URI: rtsp://frigate:8554/room_a_sub
+      SOURCE_URI: ${ROOM_A_SOURCE_URI:-rtsp://frigate:8554/room_a_sub}
 
   room-b-camera:
     <<: *adapter
@@ -90,11 +90,11 @@ services:
       <<: *adapter-environment
       DEVICE_ID: room-b-camera
       SOURCE_KIND: gstreamer
-      SOURCE_URI: rtsp://frigate:8554/room_b_sub
+      SOURCE_URI: ${ROOM_B_SOURCE_URI:-rtsp://frigate:8554/room_b_sub}
 
   voice-pe:
     build:
-      context: ../intercom/adapter
+      context: ./adapter
     restart: unless-stopped
     network_mode: host
     depends_on:
@@ -105,9 +105,9 @@ services:
       DEVICE_ID: voice-pe
       SOURCE_KIND: silence
       MUSIC_ASSISTANT_RECEIVED: "true"
-      MUSIC_ASSISTANT_URL: http://127.0.0.1:8095
-      MUSIC_ASSISTANT_PLAYER_ID: voice-pe-player-id
-      MUSIC_ASSISTANT_STREAM_URL: http://192.0.2.10:8088/stream.wav
+      MUSIC_ASSISTANT_URL: ${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}
+      MUSIC_ASSISTANT_PLAYER_ID: ${MUSIC_ASSISTANT_PLAYER_ID:-voice-pe-player-id}
+      MUSIC_ASSISTANT_STREAM_URL: ${MUSIC_ASSISTANT_STREAM_URL:-http://192.0.2.10:8088/stream.wav}
       MUSIC_ASSISTANT_TOKEN_FILE: /run/secrets/music-assistant-token
       HTTP_PORT: "8088"
     volumes:

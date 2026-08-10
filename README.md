@@ -12,7 +12,7 @@ uses GStreamer for RTSP camera audio and Baresip for its internal RTP/SIP leg;
 SIP is only an adapter implementation detail here. Future SIP phones can use
 FreeSWITCH directly.
 
-## Discovered targets (2026-08-08)
+## Example deployment targets
 
 | Device | Address/interface | PoC role |
 | --- | --- | --- |
@@ -22,6 +22,10 @@ FreeSWITCH directly.
 | Home Assistant Voice PE | `192.0.2.20`, ESPHome/Home Assistant | future duplex adapter target; stock firmware is not a general SIP endpoint |
 | Amazon Echo | `192.0.2.24`, Alexa integration | future speaker sink only; excluded from the offline core because normal control depends on Amazon services |
 
+The addresses above are documentation-only examples from the RFC 5737 range.
+Supply the real device addresses and stream URLs through deployment-specific
+environment values; do not commit them.
+
 The deterministic PoC participants are two synthetic duplex adapters, one
 speaker-only capture adapter, and the real RTSP camera microphone. This proves
 the conference and adapter boundary without claiming unsupported native
@@ -29,14 +33,14 @@ interfaces on the Voice PE or Echo.
 
 ## Run
 
-The Portainer stack is [`../stacks/intercom.yaml`](../stacks/intercom.yaml).
+The Compose stack is [`compose.yaml`](compose.yaml).
 It publishes only the controller on loopback (`127.0.0.1:8099`). FreeSWITCH,
 SIP, and RTP stay on the internal Docker network for this unauthenticated PoC.
 
 ```sh
 export INTERCOM_ESL_PASSWORD="$(openssl rand -hex 24)"
-docker compose -f stacks/intercom.yaml config
-docker compose -f stacks/intercom.yaml up -d --build
+docker compose config
+docker compose up -d --build
 curl -fsS http://127.0.0.1:8099/health | jq
 ```
 
@@ -51,7 +55,7 @@ deliberately application data rather than a controller registry; neither script
 contains a secret.
 
 ```sh
-./intercom/scripts/connect-lab-clients.sh
+./scripts/connect-lab-clients.sh
 curl -fsS http://127.0.0.1:8099/session | jq
 ```
 
@@ -73,7 +77,7 @@ curl -fsS -X PUT -H 'Content-Type: application/json' \
 Disconnect the synthetic test clients:
 
 ```sh
-./intercom/scripts/disconnect-lab-clients.sh
+./scripts/disconnect-lab-clients.sh
 ```
 
 The `voice-pe` adapter runs on the host network. It exposes received conference
@@ -101,15 +105,15 @@ docker run --rm -i \
   -v homeassistant_music_assistant_data:/data \
   -v intercom_music_assistant_auth:/run/intercom-auth \
   ghcr.io/music-assistant/server:latest \
-  python3 - <intercom/music-assistant/provision_token.py
+  python3 - <music-assistant/provision_token.py
 ```
 
 The current local application script connects both room cameras with their
 owned gain settings and enables each route:
 
 ```sh
-./intercom/scripts/connect-rooms-to-voice-pe.sh
-./intercom/scripts/disconnect-rooms-from-voice-pe.sh
+./scripts/connect-rooms-to-voice-pe.sh
+./scripts/disconnect-rooms-from-voice-pe.sh
 ```
 
 The end-to-end smoke test temporarily routes the synthetic 440 Hz source to the
@@ -117,7 +121,7 @@ Voice PE, then asserts that the MA stream client consumed non-silent conference
 PCM. It always disconnects its test participants:
 
 ```sh
-./intercom/scripts/test-music-assistant-e2e.sh
+./scripts/test-music-assistant-e2e.sh
 ```
 
 The native FLAC endpoint has an independent end-to-end test. It routes the
@@ -125,7 +129,7 @@ synthetic source to the capture adapter, decodes `/stream.flac`, and rejects
 silent or truncated PCM:
 
 ```sh
-./intercom/scripts/test-flac-stream-e2e.sh
+./scripts/test-flac-stream-e2e.sh
 ```
 
 The reproducible custom Voice PE firmware and authenticated microphone bridge
