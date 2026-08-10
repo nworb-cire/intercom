@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import threading
@@ -20,9 +21,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from core.interfaces import AudioSink, AudioSource
+from core.interfaces import Integration, StreamEncoder
 
-from .streaming import FlacStreamSink, pcm_peak
+from .streaming import FlacStreamEncoder, pcm_peak
 
 
 @dataclass(frozen=True)
@@ -50,8 +51,8 @@ class RuntimeConfig:
 class AdapterRuntime:
     """Run one application-supplied device adapter around a shared media leg."""
 
-    def __init__(self, source: AudioSource, config: RuntimeConfig | None = None) -> None:
-        self.source = source
+    def __init__(self, integration: Integration, config: RuntimeConfig | None = None) -> None:
+        self.integration = integration
         self.config = config or RuntimeConfig.from_environment()
         self.connected = False
         self.lock = threading.Lock()
@@ -61,7 +62,11 @@ class AdapterRuntime:
         self.stream_pcm_bytes = 0
         self.stream_peak = 0
         self.baresip: subprocess.Popen[str] | None = None
-        self.stream_sink: AudioSink = FlacStreamSink()
+        self.stream_encoder: StreamEncoder = FlacStreamEncoder()
+        self.capture_processes: list[subprocess.Popen[Any]] = []
+        self.server: ThreadingHTTPServer | None = None
+        self.shutdown_event = threading.Event()
+        self._stopped = False
 
     def media_ip(self) -> str:
         match = re.search(r"@([^:;>]+)", self.config.freeswitch_uri)
@@ -75,12 +80,13 @@ class AdapterRuntime:
     def write_baresip_config(self) -> None:
         self.config.config_dir.mkdir(parents=True, exist_ok=True)
         bind_ip = self.media_ip()
+        modules = "\n".join(f"module {module}" for module in self.integration.source.baresip_modules)
         baresip_config = f"""poll_method epoll
 net_interface {bind_ip}
 sip_listen {bind_ip}:5060
 call_max_calls 1
 audio_player pulse,intercom
-audio_source {self.source.baresip_source}
+audio_source {self.integration.source.baresip_source}
 audio_alert pulse,intercom
 auplay_srate 16000
 ausrc_srate 48000
@@ -91,13 +97,7 @@ rtcp_enable yes
 rtcp_mux no
 jitter_buffer_delay 2-10
 module_path /usr/lib/baresip/modules
-module stdio.so
-module g711.so
-module pulse.so
-module ausine.so
-module gst.so
-module account.so
-module menu.so
+{modules}
 """
         account = (
             f'"{self.config.device_id}" <sip:{self.config.device_id}@127.0.0.1;transport=udp>'
@@ -137,7 +137,7 @@ module menu.so
             if time.monotonic() >= deadline:
                 raise subprocess.CalledProcessError(loaded.returncode, loaded.args)
             time.sleep(0.1)
-        self.source.prepare(self.config.config_dir)
+        self.integration.prepare(self.config.config_dir)
 
     def start_capture(self) -> list[subprocess.Popen[Any]]:
         if not self.config.capture_received:
@@ -165,9 +165,9 @@ module menu.so
     def start_processes(self) -> None:
         self.write_baresip_config()
         self.start_pulse()
-        self.source.start(lambda: self.connected)
-        capture_processes = self.start_capture()
-        for process_name, process in zip(("capture source", "capture writer"), capture_processes):
+        self.integration.start(lambda: self.connected)
+        self.capture_processes = self.start_capture()
+        for process_name, process in zip(("capture source", "capture writer"), self.capture_processes):
             threading.Thread(
                 target=self.watch_child,
                 args=(process_name, process),
@@ -209,6 +209,45 @@ module menu.so
                 for process in tuple(self.stream_processes):
                     process.terminate()
 
+    def request_shutdown(self, _signum: int, _frame: Any) -> None:
+        if not self.shutdown_event.is_set():
+            threading.Thread(target=self.shutdown, name="adapter-shutdown", daemon=True).start()
+
+    def shutdown(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        self.shutdown_event.set()
+        if self.server is not None:
+            self.server.shutdown()
+        with self.lock:
+            if self.connected and self.baresip is not None and self.baresip.poll() is None:
+                try:
+                    self.command("/hangup")
+                except RuntimeError:
+                    pass
+            self.connected = False
+        try:
+            self.integration.stop()
+        finally:
+            with self.stream_lock:
+                active_processes = tuple(self.stream_processes)
+            for process in active_processes + tuple(self.capture_processes):
+                if process.poll() is None:
+                    process.terminate()
+            if self.baresip is not None and self.baresip.poll() is None:
+                self.baresip.terminate()
+            for process in active_processes + tuple(self.capture_processes):
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            if self.baresip is not None:
+                try:
+                    self.baresip.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.baresip.kill()
+
     def health(self) -> dict[str, Any]:
         with self.stream_lock:
             stream_status = {
@@ -220,15 +259,17 @@ module menu.so
         return {
             "ok": baresip_ok,
             "device_id": self.config.device_id,
-            "source_kind": self.source.kind,
+            "integration": self.integration.name,
+            "source_kind": self.integration.source.kind,
             "connected": self.connected,
             "capture": self.config.capture_received,
+            **self.integration.health(),
             **stream_status,
         }
 
     def stream_flac(self, handler: BaseHTTPRequestHandler) -> None:
         handler.send_response(HTTPStatus.OK)
-        handler.send_header("Content-Type", self.stream_sink.content_type)
+        handler.send_header("Content-Type", self.stream_encoder.content_type)
         handler.send_header("Cache-Control", "no-store")
         handler.end_headers()
         source = subprocess.Popen(
@@ -240,7 +281,7 @@ module menu.so
             stderr=subprocess.DEVNULL,
         )
         encoder = subprocess.Popen(
-            self.stream_sink.encoder_command(),
+            self.stream_encoder.encoder_command(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -308,7 +349,7 @@ module menu.so
                 self.wfile.write(body)
 
             def do_GET(self) -> None:
-                if self.path == runtime.stream_sink.path:
+                if self.path == runtime.stream_encoder.path:
                     runtime.stream_flac(self)
                     return
                 if self.path != "/health":
@@ -318,11 +359,11 @@ module menu.so
                 self.reply(HTTPStatus.OK if health["ok"] else HTTPStatus.SERVICE_UNAVAILABLE, health)
 
             def do_HEAD(self) -> None:
-                if self.path != runtime.stream_sink.path:
+                if self.path != runtime.stream_encoder.path:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", runtime.stream_sink.content_type)
+                self.send_header("Content-Type", runtime.stream_encoder.content_type)
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
 
@@ -343,6 +384,13 @@ module menu.so
         return Handler
 
     def run(self) -> None:
-        self.start_processes()
-        time.sleep(1)
-        ThreadingHTTPServer(("0.0.0.0", self.config.http_port), self.handler_class()).serve_forever()
+        signal.signal(signal.SIGTERM, self.request_shutdown)
+        signal.signal(signal.SIGINT, self.request_shutdown)
+        try:
+            self.start_processes()
+            time.sleep(1)
+            self.server = ThreadingHTTPServer(("0.0.0.0", self.config.http_port), self.handler_class())
+            self.server.daemon_threads = True
+            self.server.serve_forever()
+        finally:
+            self.shutdown()

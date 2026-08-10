@@ -17,7 +17,8 @@ FreeSWITCH directly.
 - [`core`](core) contains the FreeSWITCH controller, media configuration, and
   the generic Python adapter runtime plus its `AudioSource` interface.
 - [`integrations`](integrations) contains device-specific adapter
-  implementations. The Voice PE firmware is under
+  entry points and documentation; importable Python implementations live in
+  `intercom_integrations/`. The Voice PE firmware is under
   [`integrations/voice-pe/firmware`](integrations/voice-pe/firmware).
 - [`homeassistant`](homeassistant) is reserved for the future application-layer
   controller. It will own device descriptors, gain persistence, and route

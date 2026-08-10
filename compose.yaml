@@ -2,6 +2,7 @@ x-adapter: &adapter
   build:
     context: .
     dockerfile: core/adapter_runtime/Dockerfile
+    target: synthetic
   command: ["python3", "/app/integrations/synthetic/adapter.py"]
   restart: unless-stopped
   networks:
@@ -82,6 +83,10 @@ services:
 
   room-a-camera:
     <<: *adapter
+    build:
+      context: .
+      dockerfile: core/adapter_runtime/Dockerfile
+      target: rtsp_camera
     environment:
       <<: *adapter-environment
       DEVICE_ID: room-a-camera
@@ -90,6 +95,10 @@ services:
 
   room-b-camera:
     <<: *adapter
+    build:
+      context: .
+      dockerfile: core/adapter_runtime/Dockerfile
+      target: rtsp_camera
     environment:
       <<: *adapter-environment
       DEVICE_ID: room-b-camera
@@ -100,6 +109,7 @@ services:
     build:
       context: .
       dockerfile: core/adapter_runtime/Dockerfile
+      target: voice_pe
     command: ["python3", "/app/integrations/voice-pe/adapter.py"]
     restart: unless-stopped
     network_mode: host

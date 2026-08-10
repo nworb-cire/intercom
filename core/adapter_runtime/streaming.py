@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.interfaces import StreamEncoder
+
 STREAM_CONTENT_TYPES = {
     "/stream.flac": "audio/flac",
 }
 
 
 @dataclass(frozen=True)
-class FlacStreamSink:
-    """Low-latency FLAC sink exposed by adapters that support speaker playback."""
+class FlacStreamEncoder(StreamEncoder):
+    """Low-latency FLAC encoder exposed by adapters with a stream endpoint."""
 
     path: str = "/stream.flac"
     content_type: str = "audio/flac"

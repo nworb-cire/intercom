@@ -1,7 +1,9 @@
 # Integrations
 
-Each integration implements the generic `AudioSource` interface from
-[`core/interfaces.py`](../core/interfaces.py). Integrations may provide a
+Each integration implements the generic `AudioSource` and `Integration`
+interfaces from [`core/interfaces.py`](../core/interfaces.py). Importable
+implementations live in `intercom_integrations/`; the directories here contain
+container entry points and device-specific assets. Integrations may provide a
 source, a sink-facing stream, or both; the core does not retain their device
 configuration.
 

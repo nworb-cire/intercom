@@ -8,7 +8,8 @@ is intentionally unaware of concrete devices.
 - `freeswitch/` contains the conference, SIP, event-socket, and dialplan
   configuration.
 - `adapter_runtime/` contains the reusable Python adapter process and the
-  `AudioSource` contract from [`interfaces.py`](interfaces.py).
+  `AudioSource`, `StreamEncoder`, `AudioSink`, and `Integration` contracts from
+  [`interfaces.py`](interfaces.py).
 
 An integration supplies an `AudioSource` implementation. The runtime provides
 the common Baresip leg, PulseAudio sink, `/connect`, `/health`, and
