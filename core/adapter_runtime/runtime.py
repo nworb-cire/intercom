@@ -156,9 +156,10 @@ module_path /usr/lib/baresip/modules
         )
         return [parec, capture_process]
 
-    @staticmethod
-    def watch_child(name: str, child: subprocess.Popen[Any]) -> None:
+    def watch_child(self, name: str, child: subprocess.Popen[Any]) -> None:
         return_code = child.wait()
+        if self.shutdown_event.is_set():
+            return
         print(f"{name} exited unexpectedly with status {return_code}", flush=True)
         os._exit(return_code or 1)
 
@@ -181,6 +182,11 @@ module_path /usr/lib/baresip/modules
             text=True,
             bufsize=1,
         )
+        threading.Thread(
+            target=self.watch_child,
+            args=("baresip", self.baresip),
+            daemon=True,
+        ).start()
         threading.Thread(target=self.drain_baresip_output, daemon=True).start()
 
     def drain_baresip_output(self) -> None:

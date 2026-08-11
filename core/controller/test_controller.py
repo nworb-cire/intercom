@@ -124,10 +124,10 @@ class ConnectionTests(unittest.TestCase):
             controller.connect(LAB_A)
         adapter_request.assert_called_once_with("http://lab-a:8080", "POST")
         self.assertEqual(FakeESL.commands, [
-            "conference intercom unmute 1 quiet",
-            "conference intercom undeaf 1",
             "conference intercom relate 1 2 nospeak",
             "conference intercom relate 2 1 nospeak",
+            "conference intercom unmute 1 quiet",
+            "conference intercom undeaf 1",
         ])
 
     @patch.object(controller, "session", return_value={"members": [

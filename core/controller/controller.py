@@ -196,16 +196,18 @@ def wait_for_member(device_id: str, present: bool, timeout: float = 8) -> dict[s
 
 
 def enforce_capabilities(member_id: int, endpoint: Endpoint) -> None:
-    ESL().api(f"conference {ROOM} {'unmute' if endpoint.can_transmit else 'mute'} {member_id} quiet")
-    ESL().api(f"conference {ROOM} {'undeaf' if endpoint.can_receive else 'deaf'} {member_id}")
-
     # Deny all new cross-member paths until the application enables each one.
+    # The profile starts members muted and deaf, so preserve that safe state
+    # until every relationship with the existing conference is denied.
     for other in session()["members"]:
         other_id = other["member_id"]
         if other_id == member_id:
             continue
         ESL().api(f"conference {ROOM} relate {member_id} {other_id} nospeak")
         ESL().api(f"conference {ROOM} relate {other_id} {member_id} nospeak")
+
+    ESL().api(f"conference {ROOM} {'unmute' if endpoint.can_transmit else 'mute'} {member_id} quiet")
+    ESL().api(f"conference {ROOM} {'undeaf' if endpoint.can_receive else 'deaf'} {member_id}")
 
 
 def apply_gain(member_id: int, gain: GainSettings) -> None:
