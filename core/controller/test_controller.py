@@ -108,7 +108,7 @@ class RoutingTests(unittest.TestCase):
     ]})
     def test_duplicate_device_identity_is_rejected(self, _session):
         with self.assertRaisesRegex(controller.Error, "multiple conference members"):
-            controller.member_for_device("lab-a")
+            controller.member_for_device("intercom", "lab-a")
 
 
 class ConnectionTests(unittest.TestCase):
@@ -122,7 +122,7 @@ class ConnectionTests(unittest.TestCase):
     def test_reauthorizes_existing_member_and_reasserts_adapter_state(self, _session):
         with patch.object(controller, "adapter_request") as adapter_request:
             controller.connect(LAB_A)
-        adapter_request.assert_called_once_with("http://lab-a:8080", "POST")
+        adapter_request.assert_called_once_with("http://lab-a:8080", "POST", "intercom")
         self.assertEqual(FakeESL.commands, [
             "conference intercom relate 1 2 nospeak",
             "conference intercom relate 2 1 nospeak",
@@ -140,7 +140,7 @@ class ConnectionTests(unittest.TestCase):
             "lab-a", "http://lab-a:8080", True, True, controller.GainSettings(4, -1, 1000)
         )
         controller.connect(endpoint)
-        adapter_request.assert_called_once_with("http://lab-a:8080", "POST")
+        adapter_request.assert_called_once_with("http://lab-a:8080", "POST", "intercom")
         self.assertEqual(FakeESL.commands[-3:], [
             "conference intercom volume_in 1 4",
             "conference intercom volume_out 1 -1",
@@ -151,6 +151,44 @@ class ConnectionTests(unittest.TestCase):
     def test_requires_an_adapter_to_connect_a_missing_member(self, _member):
         with self.assertRaisesRegex(controller.Error, "adapter_url is required"):
             controller.connect(controller.Endpoint("sip-phone", None, True, True))
+
+    @patch.object(controller, "session", return_value={"members": [
+        {"device_id": "lab-a", "member_id": 1}, {"device_id": "lab-b", "member_id": 2}
+    ]})
+    @patch.object(controller, "ESL", FakeESL)
+    def test_connection_is_scoped_to_the_requested_call(self, _session):
+        with patch.object(controller, "adapter_request") as adapter_request:
+            controller.connect(LAB_A, "doorbell")
+        adapter_request.assert_called_once_with("http://lab-a:8080", "POST", "doorbell")
+        self.assertIn("conference doorbell unmute 1 quiet", FakeESL.commands)
+
+
+class CallApiTests(unittest.TestCase):
+    def handler(self, method, path, body=None):
+        handler = object.__new__(controller.Handler)
+        handler.command = method
+        handler.path = path
+        handler.body = lambda: body or {}
+        return handler
+
+    @patch.object(controller, "session", return_value={"call_id": "doorbell", "room": "doorbell", "active": False, "members": []})
+    def test_get_call_selects_that_room(self, session):
+        status, payload = self.handler("GET", "/calls/doorbell").dispatch()
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["call_id"], "doorbell")
+        session.assert_called_once_with("doorbell")
+
+    @patch.object(controller, "connect", return_value={"call_id": "baby-monitor"})
+    def test_connect_to_a_named_room(self, connect):
+        body = {"device_id": "lab-a", "adapter_url": "http://lab-a:8080", "can_transmit": True, "can_receive": True}
+        status, payload = self.handler("POST", "/rooms/baby-monitor/connections", body).dispatch()
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["call_id"], "baby-monitor")
+        connect.assert_called_once_with(controller.Endpoint("lab-a", "http://lab-a:8080", True, True), "baby-monitor")
+
+    def test_rejects_invalid_call_id_before_an_esl_command(self):
+        with self.assertRaisesRegex(controller.ValidationError, "call_id"):
+            self.handler("GET", "/calls/unsafe_name").dispatch()
 
 
 class ESLParsingTests(unittest.TestCase):

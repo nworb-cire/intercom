@@ -1,8 +1,17 @@
 <include>
-  <extension name="local-intercom">
+  <!-- Existing local SIP callers still reach the default intercom room. -->
+  <extension name="local-intercom-default">
     <condition field="destination_number" expression="^9000$">
       <action application="answer"/>
       <action application="conference" data="intercom@wideband"/>
+    </condition>
+  </extension>
+  <!-- Adapters use an application-provided, validated call ID as the SIP
+       destination. Every call therefore gets an isolated, on-demand room. -->
+  <extension name="application-call-rooms">
+    <condition field="destination_number" expression="^[a-z0-9][a-z0-9-]{0,62}$">
+      <action application="answer"/>
+      <action application="conference" data="${destination_number}@wideband"/>
     </condition>
   </extension>
 </include>

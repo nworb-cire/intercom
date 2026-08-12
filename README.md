@@ -2,9 +2,9 @@
 
 This directory contains a deliberately small FreeSWITCH intercom proof of
 concept. FreeSWITCH and `mod_conference` remain the media engine. The Python
-control service is stateless: the application supplies an adapter descriptor
-and capabilities for each connection operation, while FreeSWITCH is the source
-of truth for live conference membership.
+control service is stateless: the application supplies a call/room name, an
+adapter descriptor, and capabilities for each connection operation, while
+FreeSWITCH is the source of truth for live conference membership.
 
 Physical devices are **not** assumed to support SIP. Each adapter has a
 device-native side and a nominally duplex media side. The RTSP-camera
@@ -130,6 +130,47 @@ leaves.
 
 ## Semantics
 
+### Calls and rooms
+
+Each named call is an isolated, on-demand FreeSWITCH conference. The API also
+accepts `rooms` as the application-facing spelling of the same resource, so an
+application can use names such as `baby-monitor`, `doorbell`,
+`incoming-phone-42`, and `upstairs-intercom` concurrently. The controller
+does not classify, create, retain, or clean up calls: joining the first member
+creates a conference and FreeSWITCH removes it after its last member leaves.
+The application owns which devices belong to each call, when a call is active,
+and which directional routes are allowed.
+
+Use the call-scoped API for new integrations:
+
+```text
+GET    /calls                         # active calls
+GET    /calls/{call_id}               # one call's live membership
+POST   /calls/{call_id}/connections
+DELETE /calls/{call_id}/connections
+PUT    /calls/{call_id}/routes/{source}/{sink}
+```
+
+`/rooms` and `/rooms/{room_id}/...` provide identical operations for clients
+that prefer room terminology. Call and device IDs must use lowercase letters,
+digits, and hyphens. The original `/session`, `/connections`, and `/routes`
+endpoints remain available for the default `intercom` call (override it with
+`INTERCOM_DEFAULT_CALL` for a deployment). An adapter can participate in only
+one call at a time; a second connection request for a different call is
+rejected instead of silently interrupting the first call.
+
+For example, connect and route the doorbell independently of the default
+intercom room:
+
+```sh
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"device_id":"room-a-camera","adapter_url":"http://room-a-camera:8080","can_transmit":true,"can_receive":false}' \
+  http://127.0.0.1:8099/calls/doorbell/connections
+curl -fsS -X PUT -H 'Content-Type: application/json' \
+  -d '{"enabled":true}' \
+  http://127.0.0.1:8099/calls/doorbell/routes/room-a-camera/voice-pe
+```
+
 - `can_transmit: false` causes the controller to apply conference `mute`.
 - `can_receive: false` causes it to apply conference `deaf`.
 - A disabled route from A to B applies `relate A B nospeak`.
@@ -154,6 +195,7 @@ loopback and must not be exposed through Traefik.
 ## Telephone evolution
 
 The PoC's internal SIP profile can be cloned and secured for registered phones
-and a later trunk. An inbound trunk call can be placed into `intercom@wideband`
-and house devices can join the same room. Nothing in the controller assumes
-that a session contains only adapter-originated calls.
+and a later trunk. An inbound trunk call can be placed into a validated named
+conference such as `incoming-phone-42@wideband`, while house devices join that
+same call through the scoped API. Nothing in the controller assumes that a
+session contains only adapter-originated calls.

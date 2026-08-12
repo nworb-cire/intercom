@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stateless, fail-closed control plane for one FreeSWITCH conference."""
+"""Stateless, fail-closed control plane for application-named conferences."""
 
 from __future__ import annotations
 
@@ -18,11 +18,15 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 
-ROOM = os.environ.get("INTERCOM_ROOM", "intercom")
 ESL_HOST = os.environ.get("FREESWITCH_ESL_HOST", "freeswitch")
 ESL_PORT = int(os.environ.get("FREESWITCH_ESL_PORT", "8021"))
 ESL_PASSWORD = os.environ["INTERCOM_ESL_PASSWORD"]
-DEVICE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+# Call IDs are also used as FreeSWITCH conference names and SIP destinations.
+# Keep them intentionally narrow before interpolating them into ESL commands.
+RESOURCE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+DEFAULT_CALL = os.environ.get("INTERCOM_DEFAULT_CALL", os.environ.get("INTERCOM_ROOM", "intercom"))
+if not RESOURCE_ID_RE.fullmatch(DEFAULT_CALL):
+    raise RuntimeError("INTERCOM_DEFAULT_CALL must contain lowercase letters, digits, and hyphens")
 operations_lock = threading.Lock()
 ADAPTER_TIMEOUT = float(os.environ.get("INTERCOM_ADAPTER_TIMEOUT", "20"))
 
@@ -33,6 +37,13 @@ class Error(RuntimeError):
 
 class ValidationError(Error):
     pass
+
+
+def call_id(value: str) -> str:
+    """Validate an application-selected call/room identifier."""
+    if not isinstance(value, str) or not RESOURCE_ID_RE.fullmatch(value):
+        raise ValidationError("call_id must contain lowercase letters, digits, and hyphens")
+    return value
 
 
 @dataclass(frozen=True)
@@ -82,7 +93,7 @@ def endpoint_from_body(body: Any) -> Endpoint:
     adapter_url = body.get("adapter_url")
     can_transmit = body.get("can_transmit")
     can_receive = body.get("can_receive")
-    if not isinstance(device_id, str) or not DEVICE_ID_RE.fullmatch(device_id):
+    if not isinstance(device_id, str) or not RESOURCE_ID_RE.fullmatch(device_id):
         raise ValidationError("device_id must contain lowercase letters, digits, and hyphens")
     if adapter_url is not None:
         if not isinstance(adapter_url, str):
@@ -143,8 +154,13 @@ class ESL:
             return result
 
 
-def adapter_request(adapter_url: str, method: str) -> dict[str, Any]:
-    request = urllib.request.Request(adapter_url + "/connect", method=method)
+def adapter_request(adapter_url: str, method: str, call: str) -> dict[str, Any]:
+    """Tell an adapter which application call it should join or leave."""
+    payload = json.dumps({"call_id": call}).encode() if method == "POST" else None
+    request = urllib.request.Request(
+        adapter_url + "/connect", data=payload, method=method,
+        headers={"Content-Type": "application/json"} if payload else {},
+    )
     try:
         with urllib.request.urlopen(request, timeout=ADAPTER_TIMEOUT) as response:
             return json.load(response)
@@ -161,8 +177,9 @@ def conferences() -> list[dict[str, Any]]:
     return data if isinstance(data, list) else data.get("conferences", [])
 
 
-def session() -> dict[str, Any]:
-    conference = next((item for item in conferences() if item.get("conference_name") == ROOM), None)
+def session(call: str = DEFAULT_CALL) -> dict[str, Any]:
+    """Return one call's live membership; an empty call is simply inactive."""
+    conference = next((item for item in conferences() if item.get("conference_name") == call), None)
     members = [] if conference is None else conference.get("members", [])
     normalized = []
     for member in members:
@@ -175,96 +192,112 @@ def session() -> dict[str, Any]:
             "input_gain": member.get("input-volume"),
             "output_gain": member.get("output-volume"),
         })
-    return {"room": ROOM, "active": bool(conference), "members": normalized}
+    # ``room`` is retained for existing application clients. A room is the
+    # application-facing name of this isolated conference; ``call_id`` makes
+    # that terminology explicit for new clients.
+    return {"call_id": call, "room": call, "active": bool(conference), "members": normalized}
 
 
-def member_for_device(device_id: str) -> dict[str, Any] | None:
-    matches = [member for member in session()["members"] if member["device_id"] == device_id]
+def sessions() -> list[dict[str, Any]]:
+    """List active rooms/calls known to FreeSWITCH without retaining a registry."""
+    names = sorted({item.get("conference_name") for item in conferences() if isinstance(item.get("conference_name"), str)})
+    return [session(call_id(name)) for name in names if RESOURCE_ID_RE.fullmatch(name)]
+
+
+def member_for_device(call: str, device_id: str) -> dict[str, Any] | None:
+    matches = [member for member in session(call)["members"] if member["device_id"] == device_id]
     if len(matches) > 1:
         raise Error(f"multiple conference members identify as {device_id}")
     return matches[0] if matches else None
 
 
-def wait_for_member(device_id: str, present: bool, timeout: float = 8) -> dict[str, Any] | None:
+def wait_for_member(call: str, device_id: str, present: bool, timeout: float = 8) -> dict[str, Any] | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        member = member_for_device(device_id)
+        member = member_for_device(call, device_id)
         if (member is not None) is present:
             return member
         time.sleep(0.2)
     raise Error(f"timed out waiting for {device_id} to {'join' if present else 'leave'}")
 
 
-def enforce_capabilities(member_id: int, endpoint: Endpoint) -> None:
+def enforce_capabilities(call: str, member_id: int, endpoint: Endpoint) -> None:
     # Deny all new cross-member paths until the application enables each one.
     # The profile starts members muted and deaf, so preserve that safe state
     # until every relationship with the existing conference is denied.
-    for other in session()["members"]:
+    for other in session(call)["members"]:
         other_id = other["member_id"]
         if other_id == member_id:
             continue
-        ESL().api(f"conference {ROOM} relate {member_id} {other_id} nospeak")
-        ESL().api(f"conference {ROOM} relate {other_id} {member_id} nospeak")
+        ESL().api(f"conference {call} relate {member_id} {other_id} nospeak")
+        ESL().api(f"conference {call} relate {other_id} {member_id} nospeak")
 
-    ESL().api(f"conference {ROOM} {'unmute' if endpoint.can_transmit else 'mute'} {member_id} quiet")
-    ESL().api(f"conference {ROOM} {'undeaf' if endpoint.can_receive else 'deaf'} {member_id}")
+    ESL().api(f"conference {call} {'unmute' if endpoint.can_transmit else 'mute'} {member_id} quiet")
+    ESL().api(f"conference {call} {'undeaf' if endpoint.can_receive else 'deaf'} {member_id}")
 
 
-def apply_gain(member_id: int, gain: GainSettings) -> None:
+def apply_gain(call: str, member_id: int, gain: GainSettings) -> None:
     if gain.input_level is not None:
-        ESL().api(f"conference {ROOM} volume_in {member_id} {gain.input_level}")
+        ESL().api(f"conference {call} volume_in {member_id} {gain.input_level}")
     if gain.output_level is not None:
-        ESL().api(f"conference {ROOM} volume_out {member_id} {gain.output_level}")
+        ESL().api(f"conference {call} volume_out {member_id} {gain.output_level}")
     if gain.agc_target is not None:
-        ESL().api(f"conference {ROOM} agc {member_id} {gain.agc_target}")
+        ESL().api(f"conference {call} agc {member_id} {gain.agc_target}")
 
 
-def connect(endpoint: Endpoint) -> dict[str, Any]:
+def connect(endpoint: Endpoint, call: str = DEFAULT_CALL) -> dict[str, Any]:
     """Connect or re-authorize an endpoint without retaining its definition."""
+    call = call_id(call)
     with operations_lock:
-        member = member_for_device(endpoint.device_id)
+        member = member_for_device(call, endpoint.device_id)
         if member is None:
             if endpoint.adapter_url is None:
                 raise Error("adapter_url is required to connect a device that is not already in the conference")
-            adapter_request(endpoint.adapter_url, "POST")
+            adapter_request(endpoint.adapter_url, "POST", call)
             try:
-                member = wait_for_member(endpoint.device_id, True)
+                member = wait_for_member(call, endpoint.device_id, True)
             except Error:
-                adapter_request(endpoint.adapter_url, "DELETE")
+                adapter_request(endpoint.adapter_url, "DELETE", call)
                 raise
         elif endpoint.adapter_url is not None:
             # Reassert device-native state too. Conference membership alone does
             # not prove that a speaker, camera, or other adapter is still active.
-            adapter_request(endpoint.adapter_url, "POST")
+            adapter_request(endpoint.adapter_url, "POST", call)
         assert member is not None
-        enforce_capabilities(member["member_id"], endpoint)
-        apply_gain(member["member_id"], endpoint.gain)
-        return session()
+        enforce_capabilities(call, member["member_id"], endpoint)
+        apply_gain(call, member["member_id"], endpoint.gain)
+        return session(call)
 
 
-def disconnect(endpoint: Endpoint) -> dict[str, Any]:
+def disconnect(endpoint: Endpoint, call: str = DEFAULT_CALL) -> dict[str, Any]:
     """Disconnect an endpoint using application-supplied adapter details."""
+    call = call_id(call)
     with operations_lock:
-        member = member_for_device(endpoint.device_id)
+        member = member_for_device(call, endpoint.device_id)
         if member is not None:
-            ESL().api(f"conference {ROOM} hup {member['member_id']}")
+            ESL().api(f"conference {call} hup {member['member_id']}")
         if endpoint.adapter_url is not None:
-            adapter_request(endpoint.adapter_url, "DELETE")
+            adapter_request(endpoint.adapter_url, "DELETE", call)
         if member is not None:
-            wait_for_member(endpoint.device_id, False)
-        return session()
+            wait_for_member(call, endpoint.device_id, False)
+        return session(call)
 
 
-def set_route(source: str, sink: str, enabled: bool) -> None:
+def set_route(source: str, sink: str, enabled: bool, call: str = DEFAULT_CALL) -> None:
+    call = call_id(call)
+    if not isinstance(source, str) or not RESOURCE_ID_RE.fullmatch(source):
+        raise ValidationError("source must contain lowercase letters, digits, and hyphens")
+    if not isinstance(sink, str) or not RESOURCE_ID_RE.fullmatch(sink):
+        raise ValidationError("sink must contain lowercase letters, digits, and hyphens")
     if source == sink:
         raise Error("source and sink must be different devices")
     with operations_lock:
-        source_member = member_for_device(source)
-        sink_member = member_for_device(sink)
+        source_member = member_for_device(call, source)
+        sink_member = member_for_device(call, sink)
         if source_member is None or sink_member is None:
             raise Error("both route endpoints must be connected")
         action = "clear" if enabled else "nospeak"
-        ESL().api(f"conference {ROOM} relate {source_member['member_id']} {sink_member['member_id']} {action}")
+        ESL().api(f"conference {call} relate {source_member['member_id']} {sink_member['member_id']} {action}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -311,6 +344,33 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValidationError("enabled must be boolean")
             set_route(source, sink, enabled)
             return HTTPStatus.OK, {"source": source, "sink": sink, "enabled": enabled}
+
+        # A call is an isolated, on-demand FreeSWITCH conference. ``rooms`` is
+        # a deliberately equivalent spelling: the application decides whether
+        # a name represents a baby-monitor feed, doorbell event, phone call,
+        # or a physical room. The controller stores no call/room registry.
+        collection = parts[0] if parts else None
+        if collection in ("calls", "rooms"):
+            label = "call_id" if collection == "calls" else "room_id"
+            if self.command == "GET" and len(parts) == 1:
+                active = sessions()
+                return HTTPStatus.OK, {collection: active}
+            if len(parts) < 2:
+                return HTTPStatus.NOT_FOUND, {"error": "not found"}
+            call = call_id(parts[1])
+            if self.command == "GET" and len(parts) == 2:
+                return HTTPStatus.OK, session(call)
+            if self.command == "POST" and parts[2:] == ["connections"]:
+                return HTTPStatus.OK, connect(endpoint_from_body(self.body()), call)
+            if self.command == "DELETE" and parts[2:] == ["connections"]:
+                return HTTPStatus.OK, disconnect(endpoint_from_body(self.body()), call)
+            if self.command == "PUT" and len(parts) == 5 and parts[2] == "routes":
+                source, sink = parts[3:]
+                enabled = self.body().get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValidationError("enabled must be boolean")
+                set_route(source, sink, enabled, call)
+                return HTTPStatus.OK, {label: call, "source": source, "sink": sink, "enabled": enabled}
         return HTTPStatus.NOT_FOUND, {"error": "not found"}
 
     def do_GET(self) -> None:

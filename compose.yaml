@@ -12,7 +12,7 @@ x-adapter: &adapter
     freeswitch:
       condition: service_healthy
   environment: &adapter-environment
-    FREESWITCH_URI: sip:9000@freeswitch:5070
+    FREESWITCH_URI: sip:intercom@freeswitch:5070
 
 services:
   freeswitch:
@@ -117,7 +117,7 @@ services:
       freeswitch:
         condition: service_healthy
     environment:
-      FREESWITCH_URI: sip:9000@172.30.0.2:5070
+      FREESWITCH_URI: sip:intercom@172.30.0.2:5070
       DEVICE_ID: voice-pe
       VOICE_PE_MICROPHONE: ${VOICE_PE_MICROPHONE:-false}
       UDP_REMOTE_HOST: ${UDP_REMOTE_HOST:-}

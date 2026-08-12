@@ -41,7 +41,7 @@ class RuntimeConfig:
             raise SystemExit("DEVICE_ID must contain only lowercase letters, digits, and hyphens")
         return cls(
             device_id=device_id,
-            freeswitch_uri=os.environ.get("FREESWITCH_URI", "sip:9000@freeswitch:5070"),
+            freeswitch_uri=os.environ.get("FREESWITCH_URI", "sip:intercom@freeswitch:5070"),
             http_port=int(os.environ.get("HTTP_PORT", "8080")),
             capture_received=os.environ.get("CAPTURE_RECEIVED", "false").lower() == "true",
             config_dir=Path(os.environ.get("BARESIP_CONFIG_DIR", "/run/intercom/baresip")),
@@ -55,6 +55,7 @@ class AdapterRuntime:
         self.integration = integration
         self.config = config or RuntimeConfig.from_environment()
         self.connected = False
+        self.connected_call: str | None = None
         self.lock = threading.Lock()
         self.stream_lock = threading.Lock()
         self.stream_processes: set[subprocess.Popen[bytes]] = set()
@@ -200,17 +201,35 @@ module_path /usr/lib/baresip/modules
         self.baresip.stdin.write(value + "\n")
         self.baresip.stdin.flush()
 
-    def connect(self) -> None:
+    @staticmethod
+    def call_id(value: object) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", value):
+            raise ValueError("call_id must contain lowercase letters, digits, and hyphens")
+        return value
+
+    def call_uri(self, call: str) -> str:
+        """Use the configured FreeSWITCH host while selecting a call by name."""
+        match = re.fullmatch(r"sip:[^@]+@(.+)", self.config.freeswitch_uri)
+        if not match:
+            raise RuntimeError("FREESWITCH_URI must be a SIP URI with a destination and host")
+        return f"sip:{call}@{match.group(1)}"
+
+    def connect(self, call: str = "intercom") -> None:
+        call = self.call_id(call)
         with self.lock:
             if not self.connected:
-                self.command(f"/dial {self.config.freeswitch_uri}")
+                self.command(f"/dial {self.call_uri(call)}")
+            elif self.connected_call != call:
+                raise RuntimeError(f"adapter is already connected to call {self.connected_call}")
             self.connected = True
+            self.connected_call = call
 
     def disconnect(self) -> None:
         with self.lock:
             if self.connected:
                 self.command("/hangup")
                 self.connected = False
+                self.connected_call = None
             with self.stream_lock:
                 for process in tuple(self.stream_processes):
                     process.terminate()
@@ -233,6 +252,7 @@ module_path /usr/lib/baresip/modules
                 except RuntimeError:
                     pass
             self.connected = False
+            self.connected_call = None
         try:
             self.integration.stop()
         finally:
@@ -268,6 +288,7 @@ module_path /usr/lib/baresip/modules
             "integration": self.integration.name,
             "source_kind": self.integration.source.kind,
             "connected": self.connected,
+            "call_id": self.connected_call,
             "capture": self.config.capture_received,
             **self.integration.health(),
             **stream_status,
@@ -377,8 +398,16 @@ module_path /usr/lib/baresip/modules
                 if self.path != "/connect":
                     self.reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
                     return
-                runtime.connect()
-                self.reply(HTTPStatus.ACCEPTED, {"connected": runtime.connected})
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(payload, dict):
+                        raise ValueError("request body must be an object")
+                    runtime.connect(payload.get("call_id", "intercom"))
+                except (ValueError, json.JSONDecodeError, RuntimeError) as exc:
+                    self.reply(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
+                self.reply(HTTPStatus.ACCEPTED, {"connected": runtime.connected, "call_id": runtime.connected_call})
 
             def do_DELETE(self) -> None:
                 if self.path != "/connect":

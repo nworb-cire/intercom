@@ -62,6 +62,26 @@ class AdapterRuntimeTests(unittest.TestCase):
         self.assertEqual(health["stream_clients"], 0)
         self.assertTrue(health["fake_ready"])
 
+    def test_connect_dials_the_requested_call_on_the_configured_host(self):
+        runtime = AdapterRuntime(
+            FakeIntegration(),
+            RuntimeConfig("test-device", "sip:intercom@freeswitch:5070", 8080, False, Path("/tmp")),
+        )
+        with patch.object(runtime, "command") as command:
+            runtime.connect("doorbell")
+        command.assert_called_once_with("/dial sip:doorbell@freeswitch:5070")
+        self.assertEqual(runtime.connected_call, "doorbell")
+
+    def test_adapter_will_not_silently_move_between_calls(self):
+        runtime = AdapterRuntime(
+            FakeIntegration(),
+            RuntimeConfig("test-device", "sip:intercom@freeswitch:5070", 8080, False, Path("/tmp")),
+        )
+        with patch.object(runtime, "command"):
+            runtime.connect("doorbell")
+            with self.assertRaisesRegex(RuntimeError, "already connected"):
+                runtime.connect("baby-monitor")
+
     def test_shutdown_stops_integration_once(self):
         integration = FakeIntegration()
         runtime = AdapterRuntime(integration, RuntimeConfig("test-device", "sip:9000@freeswitch:5070", 8080, False, Path("/tmp")))
